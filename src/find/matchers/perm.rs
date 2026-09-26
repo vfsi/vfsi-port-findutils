@@ -108,7 +108,6 @@ impl PermMatcher {
 impl Matcher for PermMatcher {
     #[cfg(unix)]
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
-        use std::os::unix::fs::PermissionsExt;
         match file_info.metadata() {
             Ok(metadata) => {
                 let pattern = if metadata.is_dir() {

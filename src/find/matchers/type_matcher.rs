@@ -87,7 +87,7 @@ impl Matcher for XtypeMatcher {
 
         let file_type = follow
             .metadata(file_info)
-            .map(|m| m.file_type().into())
+            .map(|m| m.file_type())
             .or_else(|e| {
                 if e.is_loop() {
                     Ok(FileType::Symlink)

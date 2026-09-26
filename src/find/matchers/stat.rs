@@ -4,8 +4,6 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
-use std::os::unix::fs::MetadataExt;
-
 use super::{ComparableValue, Matcher, MatcherIO, WalkEntry};
 
 /// Inode number matcher.

@@ -14,7 +14,7 @@ use chrono::{DateTime, Local, Timelike};
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
-use super::{ComparableValue, Follow, Matcher, MatcherIO, WalkEntry};
+use super::{ComparableValue, Follow, Matcher, MatcherIO, Meta, WalkEntry};
 
 const SECONDS_PER_DAY: i64 = 60 * 60 * 24;
 
@@ -105,7 +105,7 @@ impl NewerOptionType {
         }
     }
 
-    fn get_file_time(self, metadata: &Metadata) -> std::io::Result<SystemTime> {
+    fn get_file_time(self, metadata: &Meta) -> std::io::Result<SystemTime> {
         match self {
             Self::Accessed => metadata.accessed(),
             Self::Birthed => metadata.created(),
@@ -249,6 +249,29 @@ impl ChangeTime for Metadata {
     }
 }
 
+#[cfg(unix)]
+impl ChangeTime for Meta {
+    fn changed(&self) -> std::io::Result<SystemTime> {
+        let ctime_sec = self.ctime();
+        let ctime_nsec = self.ctime_nsec() as u32;
+        let ctime = if ctime_sec >= 0 {
+            UNIX_EPOCH + std::time::Duration::new(ctime_sec as u64, ctime_nsec)
+        } else {
+            UNIX_EPOCH - std::time::Duration::new(-ctime_sec as u64, ctime_nsec)
+        };
+        Ok(ctime)
+    }
+}
+
+#[cfg(not(unix))]
+impl ChangeTime for Meta {
+    fn changed(&self) -> std::io::Result<SystemTime> {
+        // Rust's stdlib doesn't (yet) expose ChangeTime on Windows
+        // https://github.com/rust-lang/rust/issues/121478
+        Err(std::io::Error::from(std::io::ErrorKind::Unsupported))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum FileTimeType {
     Accessed,
@@ -257,7 +280,7 @@ pub enum FileTimeType {
 }
 
 impl FileTimeType {
-    fn get_file_time(self, metadata: &Metadata) -> std::io::Result<SystemTime> {
+    fn get_file_time(self, metadata: &Meta) -> std::io::Result<SystemTime> {
         match self {
             Self::Accessed => metadata.accessed(),
             Self::Changed => metadata.changed(),

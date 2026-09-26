@@ -64,7 +64,7 @@ use fs::FileSystemMatcher;
 use ls::Ls;
 use std::{
     error::Error,
-    fs::{File, Metadata},
+    fs::File,
     path::{Path, PathBuf},
     str::FromStr,
     time::SystemTime,
@@ -72,7 +72,7 @@ use std::{
 
 use super::{Config, Dependencies};
 
-pub use entry::{FileType, WalkEntry, WalkError};
+pub use entry::{FileType, Meta, VfsMeta, WalkEntry, WalkError};
 pub use regex::RegexType;
 
 /// Symlink following mode.
@@ -97,7 +97,7 @@ impl Follow {
     }
 
     /// Get metadata for a [WalkEntry].
-    pub fn metadata(self, entry: &WalkEntry) -> Result<Metadata, WalkError> {
+    pub fn metadata(self, entry: &WalkEntry) -> Result<Meta, WalkError> {
         if self.follow_at_depth(entry.depth()) == entry.follow() {
             // Same follow flag, re-use cached metadata
             entry.metadata().cloned()
@@ -113,7 +113,7 @@ impl Follow {
     }
 
     /// Get metadata for a path from the command line.
-    pub fn root_metadata(self, path: impl AsRef<Path>) -> Result<Metadata, WalkError> {
+    pub fn root_metadata(self, path: impl AsRef<Path>) -> Result<Meta, WalkError> {
         self.metadata_at_depth(path, 0)
     }
 
@@ -122,18 +122,18 @@ impl Follow {
         self,
         path: impl AsRef<Path>,
         depth: usize,
-    ) -> Result<Metadata, WalkError> {
+    ) -> Result<Meta, WalkError> {
         let path = path.as_ref();
 
         if self.follow_at_depth(depth) {
             match path.metadata().map_err(WalkError::from) {
-                Ok(meta) => return Ok(meta),
+                Ok(meta) => return Ok(Meta::Std(meta)),
                 Err(e) if !e.is_not_found() => return Err(e),
                 _ => {}
             }
         }
 
-        Ok(path.symlink_metadata()?)
+        Ok(Meta::Std(path.symlink_metadata()?))
     }
 }
 

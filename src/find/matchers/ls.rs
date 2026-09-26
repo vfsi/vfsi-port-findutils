@@ -126,8 +126,6 @@ impl Ls {
         mut out: impl Write,
         print_error_message: bool,
     ) {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
         let metadata = file_info.metadata().unwrap();
 
         let inode_number = metadata.ino();

@@ -7,8 +7,9 @@ use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
 use std::io::{self, ErrorKind};
 #[cfg(unix)]
-use std::os::unix::fs::FileTypeExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use walkdir::DirEntry;
 
@@ -79,6 +80,272 @@ impl From<fs::FileType> for FileType {
         }
 
         Self::Unknown
+    }
+}
+
+/// Metadata for an entry whose attributes came from a VFSI directory listing
+/// rather than a kernel `stat`.
+#[derive(Clone, Debug)]
+pub struct VfsMeta {
+    ptype: FileType,
+    len: u64,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    nlink: u64,
+    ino: u64,
+    blocks: u64,
+    atime: (i64, u32),
+    mtime: (i64, u32),
+    ctime: (i64, u32),
+}
+
+#[cfg(feature = "vnfs")]
+impl VfsMeta {
+    pub fn from_attrs(attrs: &vnfs::VfAttrs) -> Self {
+        Self {
+            ptype: FileType::from(attrs.ftype),
+            len: attrs.size,
+            mode: attrs.mode,
+            uid: attrs.uid,
+            gid: attrs.gid,
+            nlink: u64::from(attrs.nlink),
+            ino: attrs.fileid,
+            blocks: attrs.blocks,
+            atime: (attrs.atime_sec, attrs.atime_nsec),
+            mtime: (attrs.mtime_sec, attrs.mtime_nsec),
+            ctime: (attrs.ctime_sec, attrs.ctime_nsec),
+        }
+    }
+}
+
+#[cfg(feature = "vnfs")]
+impl From<vnfs::VfType> for FileType {
+    fn from(t: vnfs::VfType) -> Self {
+        match t {
+            vnfs::VfType::Regular => Self::Regular,
+            vnfs::VfType::Directory => Self::Directory,
+            vnfs::VfType::Symlink => Self::Symlink,
+            vnfs::VfType::BlockDevice => Self::BlockDevice,
+            vnfs::VfType::CharDevice => Self::CharDevice,
+            vnfs::VfType::Fifo => Self::Fifo,
+            vnfs::VfType::Socket => Self::Socket,
+            vnfs::VfType::Other(_) => Self::Unknown,
+        }
+    }
+}
+
+/// Convert an NFS `(seconds, nanoseconds)` timestamp to a `SystemTime`.
+fn system_time(seconds: i64, nanos: u32) -> SystemTime {
+    let base = if seconds >= 0 {
+        UNIX_EPOCH.checked_add(Duration::from_secs(seconds.unsigned_abs()))
+    } else {
+        UNIX_EPOCH.checked_sub(Duration::from_secs(seconds.unsigned_abs()))
+    }
+    .unwrap_or(UNIX_EPOCH);
+    base.checked_add(Duration::from_nanos(u64::from(nanos)))
+        .unwrap_or(base)
+}
+
+/// Metadata for a walked entry: either the kernel's `std::fs::Metadata` or the
+/// fields carried by a VFSI/NFS directory listing.
+#[derive(Clone, Debug)]
+pub enum Meta {
+    Std(Metadata),
+    Vfs(VfsMeta),
+}
+
+impl Meta {
+    pub fn file_type(&self) -> FileType {
+        match self {
+            Self::Std(m) => m.file_type().into(),
+            Self::Vfs(v) => v.ptype,
+        }
+    }
+
+    pub fn is_dir(&self) -> bool {
+        self.file_type().is_dir()
+    }
+
+    pub fn is_file(&self) -> bool {
+        self.file_type().is_file()
+    }
+
+    pub fn is_symlink(&self) -> bool {
+        self.file_type().is_symlink()
+    }
+
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> u64 {
+        match self {
+            Self::Std(m) => m.len(),
+            Self::Vfs(v) => v.len,
+        }
+    }
+
+    /// `st_size`, mirroring `std::os::unix::fs::MetadataExt::size`.
+    #[cfg(unix)]
+    pub fn size(&self) -> u64 {
+        self.len()
+    }
+
+    #[cfg(unix)]
+    pub fn mode(&self) -> u32 {
+        match self {
+            Self::Std(m) => m.mode(),
+            Self::Vfs(v) => v.mode,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn uid(&self) -> u32 {
+        match self {
+            Self::Std(m) => m.uid(),
+            Self::Vfs(v) => v.uid,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn gid(&self) -> u32 {
+        match self {
+            Self::Std(m) => m.gid(),
+            Self::Vfs(v) => v.gid,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn nlink(&self) -> u64 {
+        match self {
+            Self::Std(m) => m.nlink(),
+            Self::Vfs(v) => v.nlink,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn ino(&self) -> u64 {
+        match self {
+            Self::Std(m) => m.ino(),
+            Self::Vfs(v) => v.ino,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn dev(&self) -> u64 {
+        match self {
+            Self::Std(m) => m.dev(),
+            // A single NFS export is one device.
+            Self::Vfs(_) => 0,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn blocks(&self) -> u64 {
+        match self {
+            Self::Std(m) => m.blocks(),
+            Self::Vfs(v) => v.blocks,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn atime(&self) -> i64 {
+        match self {
+            Self::Std(m) => m.atime(),
+            Self::Vfs(v) => v.atime.0,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn atime_nsec(&self) -> i64 {
+        match self {
+            Self::Std(m) => m.atime_nsec(),
+            Self::Vfs(v) => i64::from(v.atime.1),
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn mtime(&self) -> i64 {
+        match self {
+            Self::Std(m) => m.mtime(),
+            Self::Vfs(v) => v.mtime.0,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn mtime_nsec(&self) -> i64 {
+        match self {
+            Self::Std(m) => m.mtime_nsec(),
+            Self::Vfs(v) => i64::from(v.mtime.1),
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn ctime(&self) -> i64 {
+        match self {
+            Self::Std(m) => m.ctime(),
+            Self::Vfs(v) => v.ctime.0,
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn ctime_nsec(&self) -> i64 {
+        match self {
+            Self::Std(m) => m.ctime_nsec(),
+            Self::Vfs(v) => i64::from(v.ctime.1),
+        }
+    }
+
+    #[cfg(unix)]
+    pub fn permissions(&self) -> Perms {
+        match self {
+            Self::Std(m) => Perms(m.permissions().mode() & 0o7777),
+            Self::Vfs(v) => Perms(v.mode & 0o7777),
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn file_attributes(&self) -> u32 {
+        use std::os::windows::fs::MetadataExt;
+        match self {
+            Self::Std(m) => m.file_attributes(),
+            Self::Vfs(_) => 0,
+        }
+    }
+
+    pub fn modified(&self) -> io::Result<SystemTime> {
+        match self {
+            Self::Std(m) => m.modified(),
+            Self::Vfs(v) => Ok(system_time(v.mtime.0, v.mtime.1)),
+        }
+    }
+
+    pub fn accessed(&self) -> io::Result<SystemTime> {
+        match self {
+            Self::Std(m) => m.accessed(),
+            Self::Vfs(v) => Ok(system_time(v.atime.0, v.atime.1)),
+        }
+    }
+
+    pub fn created(&self) -> io::Result<SystemTime> {
+        match self {
+            Self::Std(m) => m.created(),
+            // NFS does not expose a creation timestamp here.
+            Self::Vfs(_) => Err(io::Error::new(
+                ErrorKind::Unsupported,
+                "creation time is not available",
+            )),
+        }
+    }
+}
+
+/// Permission bits extracted from an entry's metadata.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug)]
+pub struct Perms(u32);
+
+#[cfg(unix)]
+impl Perms {
+    pub fn mode(self) -> u32 {
+        self.0
     }
 }
 
@@ -202,7 +469,7 @@ pub struct WalkEntry {
     /// Whether to follow symlinks.
     follow: Follow,
     /// Cached metadata.
-    meta: OnceCell<Result<Metadata, WalkError>>,
+    meta: OnceCell<Result<Meta, WalkError>>,
 }
 
 impl WalkEntry {
@@ -212,6 +479,17 @@ impl WalkEntry {
             inner: Entry::Explicit(path.into(), depth),
             follow,
             meta: OnceCell::new(),
+        }
+    }
+
+    /// Create a WalkEntry whose metadata comes from a VFSI/NFS directory
+    /// listing instead of a kernel `stat`.
+    #[cfg(all(target_os = "linux", feature = "vnfs"))]
+    pub fn from_vfs(path: impl Into<PathBuf>, depth: usize, follow: Follow, meta: VfsMeta) -> Self {
+        Self {
+            inner: Entry::Explicit(path.into(), depth),
+            follow,
+            meta: Ok(Meta::Vfs(meta)).into(),
         }
     }
 
@@ -244,7 +522,7 @@ impl WalkEntry {
                         return Ok(Self {
                             inner: Entry::Explicit(path.into(), depth),
                             follow: Follow::Never,
-                            meta: Ok(meta).into(),
+                            meta: Ok(Meta::Std(meta)).into(),
                         });
                     }
                 }
@@ -298,16 +576,16 @@ impl WalkEntry {
     }
 
     /// Get the metadata on a cache miss.
-    fn get_metadata(&self) -> Result<Metadata, WalkError> {
+    fn get_metadata(&self) -> Result<Meta, WalkError> {
         self.follow.metadata_at_depth(self.path(), self.depth())
     }
 
-    /// Get the [Metadata] for this entry, following symbolic links if appropriate.
-    /// Multiple calls to this function will cache and re-use the same [Metadata].
-    pub fn metadata(&self) -> Result<&Metadata, WalkError> {
+    /// Get the metadata for this entry, following symbolic links if appropriate.
+    /// Multiple calls to this function will cache and re-use the same metadata.
+    pub fn metadata(&self) -> Result<&Meta, WalkError> {
         let result = self.meta.get_or_init(|| match &self.inner {
-            Entry::Explicit(_, _) => Ok(self.get_metadata()?),
-            Entry::WalkDir(ent) => Ok(ent.metadata()?),
+            Entry::Explicit(_, _) => self.get_metadata(),
+            Entry::WalkDir(ent) => Ok(Meta::Std(ent.metadata()?)),
         });
         result.as_ref().map_err(std::clone::Clone::clone)
     }
@@ -315,9 +593,7 @@ impl WalkEntry {
     /// Get the file type of this entry.
     pub fn file_type(&self) -> FileType {
         match &self.inner {
-            Entry::Explicit(_, _) => self
-                .metadata()
-                .map_or(FileType::Unknown, |m| m.file_type().into()),
+            Entry::Explicit(_, _) => self.metadata().map_or(FileType::Unknown, Meta::file_type),
             Entry::WalkDir(ent) => ent.file_type().into(),
         }
     }

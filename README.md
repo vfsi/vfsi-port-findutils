@@ -35,3 +35,32 @@ bash util/build-bfs.sh posix/basic
 ```
 
 For more details, see https://github.com/uutils/findutils-tracking/
+
+## VFSI Port
+
+This repository is the VFSI application port of
+[`uutils/findutils`](https://github.com/uutils/findutils), maintained under
+`vfsi/vfsi-port-findutils` on the `vfsi` integration branch. It adds an opt-in
+vectorized traversal for `find` that talks to an NFSv4 server directly through
+the [`vnfs`](https://crates.io/crates/vnfs) crate instead of issuing one kernel
+`lstat` per entry. File attributes are returned in the `READDIR` replies, so a
+metadata-heavy walk makes far fewer round trips.
+
+At runtime, the `VNFS_IMPL` environment variable selects the backend:
+
+- unset — the standard `std::fs`/`walkdir` traversal (default);
+- `dummy` — the local filesystem through the VFSI API;
+- `nfs` — the NFS server hosting the search root.
+
+Only the default `-P` mode (do not follow symlinks) and searches that do not
+cross filesystems (`-x`) use the VFSI path; every other mode, and any backend
+failure, falls back to the standard traversal, so output is unchanged.
+
+Build and run with the feature enabled:
+
+```
+cargo build --release --features vnfs
+VNFS_IMPL=nfs target/release/find /path/on/nfs -type f
+```
+
+Maturity: experimental, tested against the pinned `vnfs` 0.0.13 ABI.

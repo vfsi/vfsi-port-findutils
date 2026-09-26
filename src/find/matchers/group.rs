@@ -7,8 +7,6 @@ use super::{ComparableValue, Matcher, MatcherIO, WalkEntry};
 
 #[cfg(unix)]
 use nix::unistd::Group;
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 
 pub struct GroupMatcher {
     // Only read on Unix; the non-Unix `matches` implementation is a stub.
@@ -98,7 +96,6 @@ mod tests {
         use chrono::Local;
         use nix::unistd::{Gid, Group};
         use std::fs::File;
-        use std::os::unix::fs::MetadataExt;
         use tempfile::Builder;
 
         let deps = FakeDependencies::new();

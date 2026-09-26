@@ -28,6 +28,12 @@ uucore = { version = "0.10.0", features = ["entries", "fs", "fsext", "mode"] }
 walkdir = "2.5"
 itertools = "0.15.0"
 thiserror = "2.0.12"
+vnfs = { version = "=0.0.13", features = ["dummy"], optional = true }
+
+[features]
+# Opt-in VFSI/NFS traversal for find (Linux only). Selected at runtime with
+# VNFS_IMPL=dummy|nfs; unsupported modes fall back to std::fs.
+vnfs = ["dep:vnfs"]
 
 [dev-dependencies]
 criterion = { version = "4.7.0", package = "codspeed-criterion-compat" }

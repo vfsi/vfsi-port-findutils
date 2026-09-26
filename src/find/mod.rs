@@ -5,6 +5,8 @@
 // https://opensource.org/licenses/MIT.
 
 pub mod matchers;
+#[cfg(all(target_os = "linux", feature = "vnfs"))]
+mod vnfs;
 
 use matchers::{Follow, WalkEntry};
 use std::cell::RefCell;
@@ -283,6 +285,17 @@ fn process_dir(
         return 0;
     }
 
+    // Opt-in VFSI/NFS traversal: enumerate and stat the tree through batched
+    // NFS compounds instead of walkdir's per-entry kernel `stat`. Falls back to
+    // walkdir for unsupported modes or any backend failure.
+    #[cfg(all(target_os = "linux", feature = "vnfs"))]
+    #[allow(clippy::collapsible_if)]
+    if vnfs::is_enabled() && vnfs::supports(config) {
+        if let Some(entries) = vnfs::enumerate(dir, config) {
+            return process_precomputed(&entries, config, deps, matcher, quit);
+        }
+    }
+
     let mut walkdir = WalkDir::new(dir)
         .contents_first(config.depth_first)
         .max_depth(config.max_depth)
@@ -341,6 +354,66 @@ fn process_dir(
     }
     matcher.finished(&mut matcher_io);
     // This is implemented for exec +.
+    match matcher_io.exit_code() {
+        0 => {}
+        code => ret = code,
+    }
+
+    ret
+}
+
+/// Drive matchers over entries that were enumerated up front (the VFSI path).
+/// Mirrors the walkdir loop, including `finished_dir` bookkeeping and skipping
+/// the contents of a `-prune`d directory.
+#[cfg(all(target_os = "linux", feature = "vnfs"))]
+fn process_precomputed(
+    entries: &[WalkEntry],
+    _config: &Config,
+    deps: &dyn Dependencies,
+    matcher: &dyn matchers::Matcher,
+    quit: &mut bool,
+) -> i32 {
+    let mut ret = 0;
+    let mut current_dir: Option<PathBuf> = None;
+    let mut skip: Option<(PathBuf, usize)> = None;
+
+    for entry in entries {
+        if let Some((pruned, depth)) = &skip {
+            if entry.depth() > *depth && entry.path().starts_with(pruned) {
+                continue;
+            }
+            skip = None;
+        }
+
+        let mut matcher_io = matchers::MatcherIO::new(deps);
+
+        let new_dir = entry.path().parent().map(std::path::Path::to_path_buf);
+        if new_dir != current_dir {
+            if let Some(dir) = current_dir.take() {
+                matcher.finished_dir(dir.as_path(), &mut matcher_io);
+            }
+            current_dir = new_dir;
+        }
+
+        matcher.matches(entry, &mut matcher_io);
+        match matcher_io.exit_code() {
+            0 => {}
+            code => ret = code,
+        }
+        if matcher_io.should_quit() {
+            *quit = true;
+            break;
+        }
+        if matcher_io.should_skip_current_dir() {
+            skip = Some((entry.path().to_path_buf(), entry.depth()));
+        }
+    }
+
+    let mut matcher_io = matchers::MatcherIO::new(deps);
+    if let Some(dir) = current_dir.take() {
+        matcher.finished_dir(dir.as_path(), &mut matcher_io);
+    }
+    matcher.finished(&mut matcher_io);
     match matcher_io.exit_code() {
         0 => {}
         code => ret = code,

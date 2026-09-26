@@ -104,8 +104,6 @@ impl FileSystemMatcher {
 impl Matcher for FileSystemMatcher {
     #[cfg(unix)]
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
-        use std::os::unix::fs::MetadataExt;
-
         // Reuse the metadata already cached on the entry (a single shared `statx` per entry)
         // rather than issuing a fresh `lstat`/`statx` here. With several `-fstype` clauses (as
         // `updatedb` builds) this turns N stats per file into one.

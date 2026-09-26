@@ -16,9 +16,6 @@ use chrono::{format::StrftimeItems, DateTime, Local};
 use super::{FileType, Matcher, MatcherIO, WalkEntry, WalkError};
 
 #[cfg(unix)]
-use std::os::unix::prelude::MetadataExt;
-
-#[cfg(unix)]
 const STANDARD_BLOCK_SIZE: u64 = 512;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -511,9 +508,15 @@ fn format_directive<'entry>(
             .unwrap()
             .to_string_lossy(),
 
+        #[cfg(unix)]
         FormatDirective::Permissions(PermissionsFormat::Symbolic) => {
-            uucore::fs::display_permissions(meta()?, true).into()
+            uucore::fs::display_permissions_unix(meta()?.mode(), true).into()
         }
+        #[cfg(not(unix))]
+        FormatDirective::Permissions(PermissionsFormat::Symbolic) => match meta()? {
+            super::Meta::Std(m) => uucore::fs::display_permissions(m, true).into(),
+            super::Meta::Vfs(_) => "".into(),
+        },
         #[cfg(not(unix))]
         FormatDirective::Permissions(PermissionsFormat::Octal) => "777".into(),
         #[cfg(unix)]

@@ -7,8 +7,6 @@ use super::{ComparableValue, Matcher, MatcherIO, WalkEntry};
 
 #[cfg(unix)]
 use nix::unistd::User;
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 
 pub struct UserMatcher {
     // Only read on Unix; the non-Unix `matches` implementation is a stub.
@@ -96,7 +94,6 @@ mod tests {
         use chrono::Local;
         use nix::unistd::{Uid, User};
         use std::fs::File;
-        use std::os::unix::fs::MetadataExt;
         use tempfile::Builder;
 
         let deps = FakeDependencies::new();
