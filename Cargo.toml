@@ -28,7 +28,7 @@ uucore = { version = "0.10.0", features = ["entries", "fs", "fsext", "mode"] }
 walkdir = "2.5"
 itertools = "0.15.0"
 thiserror = "2.0.12"
-vnfs = { version = "=0.0.13", features = ["dummy"], optional = true }
+vnfs = { path = "../../vnfs/crates/vnfs", features = ["dummy"], optional = true }
 
 [features]
 # Opt-in VFSI/NFS traversal for find (Linux only). Selected at runtime with

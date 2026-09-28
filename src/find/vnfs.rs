@@ -18,34 +18,42 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use vnfs::{AttrMask, DummyVecFs, NfsVecFs, VecFs, VfAttrs, VfFile, VfType};
+use vnfs::{
+    DirEntry, DirectoryListing, Metadata, MetadataFields, Mounted, Nfs, NfsClient, VfError, VfType,
+    WalkOptions,
+};
 
 use super::matchers::{VfsMeta, WalkEntry};
 use super::{Config, Follow};
 
 enum Backend {
-    Dummy(DummyVecFs),
-    Nfs(Box<NfsVecFs>),
+    Dummy(Mounted),
+    Nfs(NfsClient),
 }
 
 impl Backend {
-    fn lstat(&mut self, path: &Path, masks: AttrMask) -> Result<VfAttrs, vnfs::VfError> {
-        let mut attrs = VfAttrs {
-            file: VfFile::from_os_path(path),
-            masks,
-            ..VfAttrs::default()
-        };
+    fn lstat(&self, path: &Path, fields: MetadataFields) -> Result<Metadata, VfError> {
         match self {
-            Self::Dummy(fs) => fs.lgetattrsv(std::slice::from_mut(&mut attrs))?,
-            Self::Nfs(fs) => fs.lgetattrsv(std::slice::from_mut(&mut attrs))?,
+            Self::Dummy(fs) => fs.symlink_metadata_with_fields(path, fields),
+            Self::Nfs(fs) => fs.symlink_metadata_with_fields(path, fields),
         }
-        Ok(attrs)
     }
 
-    fn listdir(&mut self, path: &Path, masks: AttrMask) -> Result<Vec<VfAttrs>, vnfs::VfError> {
+    fn walk(
+        &self,
+        path: &Path,
+        fields: MetadataFields,
+        max_depth: usize,
+    ) -> Result<Vec<DirectoryListing>, VfError> {
+        let default = WalkOptions::new();
+        let options = if max_depth <= default.depth_limit() {
+            default.max_depth(max_depth).truncate_at_max_depth(true)
+        } else {
+            default
+        };
         match self {
-            Self::Dummy(fs) => fs.listdir(path, masks, 0, true),
-            Self::Nfs(fs) => fs.listdir(path, masks, 0, true),
+            Self::Dummy(fs) => fs.walk_with_options(path, fields, options),
+            Self::Nfs(fs) => fs.walk_with_options(path, fields, options),
         }
     }
 }
@@ -87,17 +95,17 @@ pub fn supports(config: &Config) -> bool {
     config.follow == Follow::Never && !config.same_file_system
 }
 
-fn attr_mask() -> AttrMask {
-    AttrMask::MODE
-        | AttrMask::SIZE
-        | AttrMask::NLINK
-        | AttrMask::FILEID
-        | AttrMask::BLOCKS
-        | AttrMask::UID
-        | AttrMask::GID
-        | AttrMask::ATIME
-        | AttrMask::MTIME
-        | AttrMask::CTIME
+fn attr_mask() -> MetadataFields {
+    MetadataFields::MODE
+        | MetadataFields::SIZE
+        | MetadataFields::NLINK
+        | MetadataFields::FILEID
+        | MetadataFields::BLOCKS
+        | MetadataFields::UID
+        | MetadataFields::GID
+        | MetadataFields::ATIME
+        | MetadataFields::MTIME
+        | MetadataFields::CTIME
 }
 
 /// One deferred traversal step. `Emit` yields an entry; `Enter` expands a
@@ -106,12 +114,12 @@ enum Action {
     Emit {
         path: PathBuf,
         depth: usize,
-        attrs: VfAttrs,
+        attrs: Metadata,
     },
     Enter {
         path: PathBuf,
         depth: usize,
-        attrs: VfAttrs,
+        attrs: Metadata,
     },
 }
 
@@ -127,8 +135,8 @@ pub fn enumerate(dir: &str, config: &Config) -> Option<Vec<WalkEntry>> {
     let vroot = Path::new("/").join(relative);
 
     let mut backend = match choice.as_str() {
-        "dummy" => Backend::Dummy(DummyVecFs::try_new(mount.point.clone()).ok()?),
-        "nfs" => Backend::Nfs(Box::new(NfsVecFs::connect(&mount.server).ok()?)),
+        "dummy" => Backend::Dummy(Mounted::new(&mount.point).ok()?),
+        "nfs" => Backend::Nfs(Nfs::connect(&mount.server).ok()?),
         _ => return None,
     };
 
@@ -139,11 +147,11 @@ pub fn enumerate(dir: &str, config: &Config) -> Option<Vec<WalkEntry>> {
 /// `typed_root`. Ordering matches `walkdir`: pre-order by default, post-order
 /// with `-depth`, and each directory's children sorted with `-s`.
 fn enumerate_backend(
-    backend: &mut Backend,
+    backend: &Backend,
     typed_root: &Path,
     vroot: &Path,
     config: &Config,
-) -> Result<Vec<WalkEntry>, vnfs::VfError> {
+) -> Result<Vec<WalkEntry>, VfError> {
     let masks = attr_mask();
     let root_attrs = backend.lstat(vroot, masks)?;
 
@@ -156,24 +164,19 @@ fn enumerate_backend(
     };
 
     // A non-directory root has no descendants.
-    if root_attrs.ftype != VfType::Directory {
+    if root_attrs.file_type() != VfType::Directory {
         return Ok(vec![WalkEntry::from_vfs(
             typed_root.to_path_buf(),
             0,
             Follow::Never,
-            VfsMeta::from_attrs(&root_attrs),
+            VfsMeta::from_metadata(&root_attrs),
         )]);
     }
 
-    let entries = backend.listdir(vroot, masks)?;
-    let mut children: HashMap<PathBuf, Vec<VfAttrs>> = HashMap::new();
-    for entry in entries {
-        if let Some(parent) = entry.file.path().and_then(Path::parent) {
-            children
-                .entry(parent.to_path_buf())
-                .or_default()
-                .push(entry);
-        }
+    let directories = backend.walk(vroot, masks, config.max_depth)?;
+    let mut children: HashMap<PathBuf, Vec<DirEntry>> = HashMap::new();
+    for directory in directories {
+        children.insert(directory.path, directory.entries);
     }
 
     let mut out = Vec::new();
@@ -190,7 +193,7 @@ fn enumerate_backend(
                         print_path(&path),
                         depth,
                         Follow::Never,
-                        VfsMeta::from_attrs(&attrs),
+                        VfsMeta::from_metadata(&attrs),
                     ));
                 }
             }
@@ -205,31 +208,24 @@ fn enumerate_backend(
                     stack.push(dir);
                     continue;
                 }
-                let mut kids: Vec<VfAttrs> = children.remove(&path).unwrap_or_default();
+                let mut kids: Vec<DirEntry> = children.remove(&path).unwrap_or_default();
                 if config.sorted_output {
-                    kids.sort_by(|a, b| {
-                        a.file
-                            .path()
-                            .and_then(Path::file_name)
-                            .cmp(&b.file.path().and_then(Path::file_name))
-                    });
+                    kids.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
                 }
                 let child_actions = kids.into_iter().map(|kid| {
-                    let child_path = kid
-                        .file
-                        .path()
-                        .map_or_else(|| path.clone(), Path::to_path_buf);
-                    if kid.ftype == VfType::Directory {
+                    let child_path = kid.path().to_path_buf();
+                    let attrs = kid.metadata().clone();
+                    if kid.file_type() == VfType::Directory {
                         Action::Enter {
                             path: child_path,
                             depth: depth + 1,
-                            attrs: kid,
+                            attrs,
                         }
                     } else {
                         Action::Emit {
                             path: child_path,
                             depth: depth + 1,
-                            attrs: kid,
+                            attrs,
                         }
                     }
                 });
@@ -284,8 +280,7 @@ mod tests {
     }
 
     fn enumerate_root(root: &Path, config: &Config) -> Vec<WalkEntry> {
-        let mut backend =
-            Backend::Dummy(DummyVecFs::try_new(root.to_path_buf()).expect("dummy root"));
+        let mut backend = Backend::Dummy(Mounted::new(root).expect("dummy root"));
         enumerate_backend(&mut backend, root, Path::new("/"), config).expect("enumerate")
     }
 

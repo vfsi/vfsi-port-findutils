@@ -102,19 +102,36 @@ pub struct VfsMeta {
 
 #[cfg(feature = "vnfs")]
 impl VfsMeta {
-    pub fn from_attrs(attrs: &vnfs::VfAttrs) -> Self {
+    pub fn from_metadata(attrs: &vnfs::Metadata) -> Self {
         Self {
-            ptype: FileType::from(attrs.ftype),
-            len: attrs.size,
-            mode: attrs.mode,
-            uid: attrs.uid,
-            gid: attrs.gid,
-            nlink: u64::from(attrs.nlink),
-            ino: attrs.fileid,
-            blocks: attrs.blocks,
-            atime: (attrs.atime_sec, attrs.atime_nsec),
-            mtime: (attrs.mtime_sec, attrs.mtime_nsec),
-            ctime: (attrs.ctime_sec, attrs.ctime_nsec),
+            ptype: FileType::from(attrs.file_type()),
+            len: attrs.len(),
+            mode: attrs.mode().unwrap_or_default(),
+            uid: attrs.uid().unwrap_or_default(),
+            gid: attrs.gid().unwrap_or_default(),
+            nlink: u64::from(attrs.nlink().unwrap_or_default()),
+            ino: attrs.file_id().unwrap_or_default(),
+            blocks: attrs.blocks().unwrap_or_default(),
+            atime: attrs.accessed().map_or((0, 0), system_time_parts),
+            mtime: attrs.modified().map_or((0, 0), system_time_parts),
+            ctime: attrs.changed().map_or((0, 0), system_time_parts),
+        }
+    }
+}
+
+#[cfg(feature = "vnfs")]
+fn system_time_parts(time: std::time::SystemTime) -> (i64, u32) {
+    use std::time::UNIX_EPOCH;
+    match time.duration_since(UNIX_EPOCH) {
+        Ok(duration) => (duration.as_secs() as i64, duration.subsec_nanos()),
+        Err(error) => {
+            let duration = error.duration();
+            let seconds = duration.as_secs() as i64;
+            if duration.subsec_nanos() == 0 {
+                (-seconds, 0)
+            } else {
+                (-seconds - 1, 1_000_000_000 - duration.subsec_nanos())
+            }
         }
     }
 }
