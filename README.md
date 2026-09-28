@@ -63,5 +63,5 @@ cargo build --release --features vnfs
 VNFS_IMPL=nfs target/release/find /path/on/nfs -type f
 ```
 
-Maturity: experimental. The high-level traversal is currently tested against
-the local `vnfs` checkout; use a published `vnfs` release for portable builds.
+Maturity: experimental. The high-level traversal builds against the published
+`vnfs` 0.0.15 release.
