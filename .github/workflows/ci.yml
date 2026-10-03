@@ -99,6 +99,8 @@ jobs:
   grcov:
     name: Code coverage
     runs-on: ${{ matrix.os }}
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     strategy:
       matrix:
         os:
@@ -125,9 +127,10 @@ jobs:
           path: lcov.info
 
       - name: Upload coverage to codecov.io
+        # Port forks retain lcov.info as an artifact without needing an
+        # upstream project's external service credentials.
+        if: env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           fail_ci_if_error: true
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
