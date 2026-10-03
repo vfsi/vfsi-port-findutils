@@ -136,6 +136,6 @@ mod tests {
         let deps = FakeDependencies::new();
 
         assert!(matcher.matches(&abbbc, &mut deps.new_matcher_io()));
-        assert!(deps.get_output_as_string().is_empty());
+        assert_eq!(deps.get_output_as_string(), "");
     }
 }

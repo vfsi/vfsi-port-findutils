@@ -166,6 +166,14 @@ impl FormatStringParser<'_> {
         const OCTAL_LEN: usize = 3;
         const OCTAL_RADIX: u32 = 8;
 
+        if self.string.is_empty() {
+            eprintln!(
+                "{}: warning: escape `\\' followed by nothing at all",
+                crate::find::program_name()
+            );
+            return Ok(FormatComponent::Literal("\\".to_owned()));
+        }
+
         // Try parsing an octal sequence first.
         let first = self.front()?;
         if first.is_digit(OCTAL_RADIX) {
@@ -202,7 +210,10 @@ impl FormatStringParser<'_> {
                 '0' => "\0",
                 '\\' => "\\",
                 c => {
-                    eprintln!("find: warning: unrecognized escape '\\{c}'");
+                    eprintln!(
+                        "{}: warning: unrecognized escape '\\{c}'",
+                        crate::find::program_name()
+                    );
                     return Ok(FormatComponent::Literal(format!("\\{c}")));
                 }
             };
@@ -314,7 +325,10 @@ impl FormatStringParser<'_> {
             'Y' => FormatDirective::Type { follow_links: true },
             // TODO: %Z
             _ => {
-                eprintln!("find: warning: unrecognized format directive '%{first}'");
+                eprintln!(
+                    "{}: warning: unrecognized format directive '%{first}'",
+                    crate::find::program_name()
+                );
                 return Ok(FormatComponent::Literal(format!("%{first}")));
             }
         };
@@ -653,9 +667,14 @@ impl Printf {
         }
 
         if let Some((_, path)) = &self.output_file {
-            let _ = writeln!(&mut stderr(), "find: {}: {error}", path.display());
+            let _ = writeln!(
+                &mut stderr(),
+                "{}: {}: {error}",
+                crate::find::program_name(),
+                path.display()
+            );
         } else {
-            let _ = writeln!(&mut stderr(), "find: {error}");
+            let _ = writeln!(&mut stderr(), "{}: {error}", crate::find::program_name());
         }
         matcher_io.set_exit_code(1);
     }
@@ -784,7 +803,17 @@ mod tests {
             FormatString::parse("\\X").unwrap().components,
             vec![FormatComponent::Literal("\\X".to_owned())]
         );
-        assert!(FormatString::parse("\\").is_err());
+        assert_eq!(
+            FormatString::parse("\\").unwrap().components,
+            vec![FormatComponent::Literal("\\".to_owned())]
+        );
+        assert_eq!(
+            FormatString::parse("abc\\").unwrap().components,
+            vec![
+                FormatComponent::Literal("abc".to_owned()),
+                FormatComponent::Literal("\\".to_owned()),
+            ]
+        );
     }
 
     #[test]
