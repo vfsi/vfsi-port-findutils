@@ -204,7 +204,7 @@ impl MatcherIO<'_> {
 pub trait Matcher: 'static {
     /// Fields required by this expression's VFSI traversal. Unknown/custom
     /// matchers conservatively retain all supported stat fields.
-    #[cfg(feature = "vnfs")]
+    #[cfg(all(target_os = "linux", feature = "vnfs"))]
     fn metadata_fields(&self) -> vnfs::MetadataFields {
         vnfs::MetadataFields::stat()
             | vnfs::MetadataFields::BLOCKS
@@ -245,7 +245,7 @@ pub trait Matcher: 'static {
 }
 
 impl Matcher for Box<dyn Matcher> {
-    #[cfg(feature = "vnfs")]
+    #[cfg(all(target_os = "linux", feature = "vnfs"))]
     fn metadata_fields(&self) -> vnfs::MetadataFields {
         (**self).metadata_fields()
     }

@@ -59,7 +59,7 @@ impl TypeMatcher {
 }
 
 impl Matcher for TypeMatcher {
-    #[cfg(feature = "vnfs")]
+    #[cfg(all(target_os = "linux", feature = "vnfs"))]
     fn metadata_fields(&self) -> vnfs::MetadataFields {
         vnfs::MetadataFields::MODE
     }

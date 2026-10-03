@@ -100,7 +100,7 @@ pub struct VfsMeta {
     ctime: (i64, u32),
 }
 
-#[cfg(feature = "vnfs")]
+#[cfg(all(target_os = "linux", feature = "vnfs"))]
 impl VfsMeta {
     pub fn from_metadata(attrs: &vnfs::Metadata) -> Self {
         Self {
@@ -119,7 +119,7 @@ impl VfsMeta {
     }
 }
 
-#[cfg(feature = "vnfs")]
+#[cfg(all(target_os = "linux", feature = "vnfs"))]
 fn system_time_parts(time: std::time::SystemTime) -> (i64, u32) {
     use std::time::UNIX_EPOCH;
     match time.duration_since(UNIX_EPOCH) {
@@ -136,7 +136,7 @@ fn system_time_parts(time: std::time::SystemTime) -> (i64, u32) {
     }
 }
 
-#[cfg(feature = "vnfs")]
+#[cfg(all(target_os = "linux", feature = "vnfs"))]
 impl From<vnfs::FileType> for FileType {
     fn from(t: vnfs::FileType) -> Self {
         match t {

@@ -106,7 +106,7 @@ impl RegexMatcher {
 }
 
 impl Matcher for RegexMatcher {
-    #[cfg(feature = "vnfs")]
+    #[cfg(all(target_os = "linux", feature = "vnfs"))]
     fn metadata_fields(&self) -> vnfs::MetadataFields {
         vnfs::MetadataFields::MODE
     }
