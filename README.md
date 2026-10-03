@@ -71,6 +71,5 @@ cargo build --release --features vnfs
 VNFS_IMPL=nfs target/release/find /path/on/nfs -type f
 ```
 
-Maturity: experimental. These traversal improvements currently use the
-development `vnfs` checkout; publish its new API before switching this port
-back to a registry dependency.
+Maturity: experimental. This port uses the public `vnfs` 0.0.16 crate from
+crates.io; a sibling development checkout is not required.
