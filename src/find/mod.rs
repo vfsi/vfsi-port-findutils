@@ -291,8 +291,8 @@ fn process_dir(
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
     #[allow(clippy::collapsible_if)]
     if vnfs::is_enabled() && vnfs::supports(config) {
-        if let Some(entries) = vnfs::enumerate(dir, config) {
-            return process_precomputed(&entries, config, deps, matcher, quit);
+        if let Some(result) = process_vfsi(dir, config, deps, matcher, quit) {
+            return result;
         }
     }
 
@@ -366,25 +366,16 @@ fn process_dir(
 /// Mirrors the walkdir loop, including `finished_dir` bookkeeping and skipping
 /// the contents of a `-prune`d directory.
 #[cfg(all(target_os = "linux", feature = "vnfs"))]
-fn process_precomputed(
-    entries: &[WalkEntry],
-    _config: &Config,
+fn process_vfsi(
+    dir: &str,
+    config: &Config,
     deps: &dyn Dependencies,
     matcher: &dyn matchers::Matcher,
     quit: &mut bool,
-) -> i32 {
+) -> Option<i32> {
     let mut ret = 0;
     let mut current_dir: Option<PathBuf> = None;
-    let mut skip: Option<(PathBuf, usize)> = None;
-
-    for entry in entries {
-        if let Some((pruned, depth)) = &skip {
-            if entry.depth() > *depth && entry.path().starts_with(pruned) {
-                continue;
-            }
-            skip = None;
-        }
-
+    let result = vnfs::visit(dir, config, matcher.metadata_fields(), |entry| {
         let mut matcher_io = matchers::MatcherIO::new(deps);
 
         let new_dir = entry.path().parent().map(std::path::Path::to_path_buf);
@@ -395,18 +386,25 @@ fn process_precomputed(
             current_dir = new_dir;
         }
 
-        matcher.matches(entry, &mut matcher_io);
+        matcher.matches(&entry, &mut matcher_io);
         match matcher_io.exit_code() {
             0 => {}
             code => ret = code,
         }
         if matcher_io.should_quit() {
             *quit = true;
-            break;
+            return ::vnfs::WalkControl::Stop;
         }
         if matcher_io.should_skip_current_dir() {
-            skip = Some((entry.path().to_path_buf(), entry.depth()));
+            return ::vnfs::WalkControl::SkipSubtree;
         }
+        ::vnfs::WalkControl::Continue
+    })?;
+    if let Err(error) = result {
+        ret = 1;
+        writeln!(&mut stderr(), "Error: {error}").unwrap();
+        // Matching may already have printed or executed commands. Do not
+        // restart through walkdir after an incremental traversal failure.
     }
 
     let mut matcher_io = matchers::MatcherIO::new(deps);
@@ -419,7 +417,7 @@ fn process_precomputed(
         code => ret = code,
     }
 
-    ret
+    Some(ret)
 }
 
 fn do_find(args: &[&str], deps: &dyn Dependencies) -> Result<i32, Box<dyn Error>> {

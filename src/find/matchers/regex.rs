@@ -106,6 +106,10 @@ impl RegexMatcher {
 }
 
 impl Matcher for RegexMatcher {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        vnfs::MetadataFields::MODE
+    }
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
         self.regex
             .is_match(file_info.path().to_string_lossy().as_ref())

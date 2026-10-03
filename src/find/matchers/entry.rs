@@ -137,17 +137,17 @@ fn system_time_parts(time: std::time::SystemTime) -> (i64, u32) {
 }
 
 #[cfg(feature = "vnfs")]
-impl From<vnfs::VfType> for FileType {
-    fn from(t: vnfs::VfType) -> Self {
+impl From<vnfs::FileType> for FileType {
+    fn from(t: vnfs::FileType) -> Self {
         match t {
-            vnfs::VfType::Regular => Self::Regular,
-            vnfs::VfType::Directory => Self::Directory,
-            vnfs::VfType::Symlink => Self::Symlink,
-            vnfs::VfType::BlockDevice => Self::BlockDevice,
-            vnfs::VfType::CharDevice => Self::CharDevice,
-            vnfs::VfType::Fifo => Self::Fifo,
-            vnfs::VfType::Socket => Self::Socket,
-            vnfs::VfType::Other(_) => Self::Unknown,
+            vnfs::FileType::Regular => Self::Regular,
+            vnfs::FileType::Directory => Self::Directory,
+            vnfs::FileType::Symlink => Self::Symlink,
+            vnfs::FileType::BlockDevice => Self::BlockDevice,
+            vnfs::FileType::CharDevice => Self::CharDevice,
+            vnfs::FileType::Fifo => Self::Fifo,
+            vnfs::FileType::Socket => Self::Socket,
+            vnfs::FileType::Other(_) => Self::Unknown,
         }
     }
 }

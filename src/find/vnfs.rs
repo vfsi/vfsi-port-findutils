@@ -1,339 +1,176 @@
-// This file is part of the uutils findutils package.
-//
-// For the full copyright and license information, please view the LICENSE
-// file that was distributed with this source code.
-
-//! Opt-in VFSI/NFS traversal for `find`.
-//!
-//! When `VNFS_IMPL=dummy|nfs` and the search root lies on an NFS mount, the
-//! tree is enumerated and attributes are read through the `vnfs` API, which
-//! returns file attributes in the `READDIR` replies instead of issuing one
-//! kernel `lstat` per entry. The resulting `WalkEntry` values carry that
-//! metadata (`Meta::Vfs`), so the existing matchers run unchanged.
-//!
-//! Only the default `-P` (never follow symlinks) mode is handled; `-L`/`-H`
-//! and `-x` fall back to `walkdir` in the parent module. Any backend failure
-//! also falls back.
-
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-
-use vnfs::{
-    DirEntry, DirectoryListing, Metadata, MetadataFields, Mounted, Nfs, NfsClient, VfError, VfType,
-    WalkOptions,
-};
-
+//! Incremental VFSI traversal. Pruning runs before reading a directory;
+//! once matching has begun, failures never replay side effects via walkdir.
 use super::matchers::{VfsMeta, WalkEntry};
 use super::{Config, Follow};
+use std::path::{Path, PathBuf};
+use vnfs::{Client, MetadataFields, Mounted, Nfs, WalkControl, WalkEventKind};
 
-enum Backend {
-    Dummy(Mounted),
-    Nfs(NfsClient),
-}
-
-impl Backend {
-    fn lstat(&self, path: &Path, fields: MetadataFields) -> Result<Metadata, VfError> {
-        match self {
-            Self::Dummy(fs) => fs.symlink_metadata_with_fields(path, fields),
-            Self::Nfs(fs) => fs.symlink_metadata_with_fields(path, fields),
-        }
-    }
-
-    fn walk(
-        &self,
-        path: &Path,
-        fields: MetadataFields,
-        max_depth: usize,
-    ) -> Result<Vec<DirectoryListing>, VfError> {
-        let default = WalkOptions::new();
-        let options = if max_depth <= default.depth_limit() {
-            default.max_depth(max_depth).truncate_at_max_depth(true)
-        } else {
-            default
-        };
-        match self {
-            Self::Dummy(fs) => fs.walk_with_options(path, fields, options),
-            Self::Nfs(fs) => fs.walk_with_options(path, fields, options),
-        }
-    }
-}
-
-struct Mount {
-    server: String,
-    point: PathBuf,
-}
-
-fn find_mount(path: &Path) -> Option<Mount> {
-    let text = std::fs::read_to_string("/proc/self/mounts").ok()?;
-    text.lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let spec = fields.next()?;
-            let point = PathBuf::from(fields.next()?);
-            let fstype = fields.next()?;
-            if (fstype != "nfs" && fstype != "nfs4") || !path.starts_with(&point) {
-                return None;
-            }
-            let (server, _) = spec.rsplit_once(':')?;
-            Some(Mount {
-                server: server.trim_matches(['[', ']']).to_owned(),
-                point,
-            })
-        })
-        .max_by_key(|mount| mount.point.as_os_str().len())
-}
-
-/// Whether `VNFS_IMPL` selects a vectorized backend.
 pub fn is_enabled() -> bool {
     matches!(std::env::var("VNFS_IMPL").as_deref(), Ok("dummy" | "nfs"))
 }
-
-/// Whether this traversal can reproduce `find` semantics for this config.
 pub fn supports(config: &Config) -> bool {
-    // Following symlinks needs walkdir's cycle-safe logic, and `-x` needs
-    // device comparisons the NFS attribute set does not carry.
     config.follow == Follow::Never && !config.same_file_system
 }
 
-fn attr_mask() -> MetadataFields {
-    MetadataFields::MODE
-        | MetadataFields::SIZE
-        | MetadataFields::NLINK
-        | MetadataFields::FILEID
-        | MetadataFields::BLOCKS
-        | MetadataFields::UID
-        | MetadataFields::GID
-        | MetadataFields::ATIME
-        | MetadataFields::MTIME
-        | MetadataFields::CTIME
+pub fn visit(
+    dir: &str,
+    config: &Config,
+    fields: MetadataFields,
+    callback: impl FnMut(WalkEntry) -> WalkControl,
+) -> Option<vnfs::Result<()>> {
+    let typed = Path::new(dir);
+    let (base, vroot) = mount_operand(typed)?;
+    match std::env::var("VNFS_IMPL").as_deref() {
+        Ok("dummy") => Some(visit_backend(
+            &Mounted::new(&base).ok()?,
+            typed,
+            &vroot,
+            config,
+            fields,
+            callback,
+        )),
+        Ok("nfs") => Some(visit_backend(
+            &Nfs::from_mount(&base).ok()?,
+            typed,
+            &vroot,
+            config,
+            fields,
+            callback,
+        )),
+        _ => None,
+    }
 }
 
-/// One deferred traversal step. `Emit` yields an entry; `Enter` expands a
-/// directory into its children.
-enum Action {
-    Emit {
-        path: PathBuf,
-        depth: usize,
-        attrs: Metadata,
-    },
-    Enter {
-        path: PathBuf,
-        depth: usize,
-        attrs: Metadata,
-    },
-}
-
-/// Enumerate the tree rooted at `dir` through VFSI. Returns `None` when the
-/// root is not on an NFS mount, the backend is disabled, or the backend fails
-/// (the caller then uses `walkdir`).
-pub fn enumerate(dir: &str, config: &Config) -> Option<Vec<WalkEntry>> {
-    let choice = std::env::var("VNFS_IMPL").ok()?;
-    let typed_root = PathBuf::from(dir);
-    let resolved = typed_root.canonicalize().ok()?;
-    let mount = find_mount(&resolved)?;
-    let relative = resolved.strip_prefix(&mount.point).ok()?;
-    let vroot = Path::new("/").join(relative);
-
-    let mut backend = match choice.as_str() {
-        "dummy" => Backend::Dummy(Mounted::new(&mount.point).ok()?),
-        "nfs" => Backend::Nfs(Nfs::connect(&mount.server).ok()?),
-        _ => return None,
+fn mount_operand(typed: &Path) -> Option<(PathBuf, PathBuf)> {
+    // Canonicalize the parent, not the final symlink: -P must report the link.
+    let (base, vroot) = if std::fs::symlink_metadata(typed).ok()?.is_dir() {
+        // A mount-point operand must be discovered on that mount, not its
+        // local parent. Only actual directories are canonicalized here.
+        (typed.canonicalize().ok()?, PathBuf::from("/"))
+    } else if let Some(name) = typed.file_name() {
+        let parent = typed
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        (parent.canonicalize().ok()?, Path::new("/").join(name))
+    } else {
+        (typed.canonicalize().ok()?, PathBuf::from("/"))
     };
-
-    enumerate_backend(&mut backend, &typed_root, &vroot, config).ok()
+    Some((base, vroot))
 }
 
-/// Enumerate `vroot` through `backend`, mapping emitted paths back onto
-/// `typed_root`. Ordering matches `walkdir`: pre-order by default, post-order
-/// with `-depth`, and each directory's children sorted with `-s`.
-fn enumerate_backend(
-    backend: &Backend,
-    typed_root: &Path,
+fn visit_backend<C: Client>(
+    client: &C,
+    typed: &Path,
     vroot: &Path,
     config: &Config,
-) -> Result<Vec<WalkEntry>, VfError> {
-    let masks = attr_mask();
-    let root_attrs = backend.lstat(vroot, masks)?;
-
-    let print_path = |backend_path: &Path| -> PathBuf {
-        match backend_path.strip_prefix(vroot) {
-            Ok(rest) if rest.as_os_str().is_empty() => typed_root.to_path_buf(),
-            Ok(rest) => typed_root.join(rest),
-            Err(_) => typed_root.to_path_buf(),
-        }
+    fields: MetadataFields,
+    mut callback: impl FnMut(WalkEntry) -> WalkControl,
+) -> vnfs::Result<()> {
+    let defaults = client.limits().walk_options();
+    let options = if config.max_depth <= defaults.depth_limit() {
+        defaults
+            .max_depth(config.max_depth)
+            .truncate_at_max_depth(true)
+    } else {
+        defaults
     };
-
-    // A non-directory root has no descendants.
-    if root_attrs.file_type() != VfType::Directory {
-        return Ok(vec![WalkEntry::from_vfs(
-            typed_root.to_path_buf(),
-            0,
-            Follow::Never,
-            VfsMeta::from_metadata(&root_attrs),
-        )]);
-    }
-
-    let directories = backend.walk(vroot, masks, config.max_depth)?;
-    let mut children: HashMap<PathBuf, Vec<DirEntry>> = HashMap::new();
-    for directory in directories {
-        children.insert(directory.path, directory.entries);
-    }
-
-    let mut out = Vec::new();
-    let mut stack = vec![Action::Enter {
-        path: vroot.to_path_buf(),
-        depth: 0,
-        attrs: root_attrs,
-    }];
-    while let Some(action) = stack.pop() {
-        match action {
-            Action::Emit { path, depth, attrs } => {
-                if depth >= config.min_depth && depth <= config.max_depth {
-                    out.push(WalkEntry::from_vfs(
-                        print_path(&path),
-                        depth,
-                        Follow::Never,
-                        VfsMeta::from_metadata(&attrs),
-                    ));
-                }
+    client
+        .walk_events_with_options(vroot, fields, options, config.sorted_output, |event| {
+            let emit = match event.kind {
+                WalkEventKind::Entry => true,
+                WalkEventKind::Enter => !config.depth_first,
+                WalkEventKind::Leave => config.depth_first,
+            };
+            if !emit || event.depth < config.min_depth {
+                return Ok(WalkControl::Continue);
             }
-            Action::Enter { path, depth, attrs } => {
-                let dir = Action::Emit {
-                    path: path.clone(),
-                    depth,
-                    attrs,
-                };
-                if depth >= config.max_depth {
-                    // Do not descend past -maxdepth.
-                    stack.push(dir);
-                    continue;
-                }
-                let mut kids: Vec<DirEntry> = children.remove(&path).unwrap_or_default();
-                if config.sorted_output {
-                    kids.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
-                }
-                let child_actions = kids.into_iter().map(|kid| {
-                    let child_path = kid.path().to_path_buf();
-                    let attrs = kid.metadata().clone();
-                    if kid.file_type() == VfType::Directory {
-                        Action::Enter {
-                            path: child_path,
-                            depth: depth + 1,
-                            attrs,
-                        }
-                    } else {
-                        Action::Emit {
-                            path: child_path,
-                            depth: depth + 1,
-                            attrs,
-                        }
-                    }
-                });
-                // The stack is LIFO: push in reverse execution order.
-                if config.depth_first {
-                    // Contents first, then the directory.
-                    stack.push(dir);
-                    for child in child_actions.collect::<Vec<_>>().into_iter().rev() {
-                        stack.push(child);
-                    }
-                } else {
-                    // Directory first, then its contents.
-                    for child in child_actions.collect::<Vec<_>>().into_iter().rev() {
-                        stack.push(child);
-                    }
-                    stack.push(dir);
-                }
-            }
-        }
-    }
-
-    Ok(out)
+            let relative = event
+                .entry
+                .path()
+                .strip_prefix(vroot)
+                .map_err(|_| vnfs::Error::client(0, 22))?;
+            let path = if relative.as_os_str().is_empty() {
+                typed.to_path_buf()
+            } else {
+                typed.join(relative)
+            };
+            let entry = WalkEntry::from_vfs(
+                path,
+                event.depth,
+                Follow::Never,
+                VfsMeta::from_metadata(event.entry.metadata()),
+            );
+            Ok(callback(entry))
+        })
+        .map(|_| ())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn tree(root: &Path) {
-        for (path, body) in [
-            ("a.txt", &b"a"[..]),
-            ("sub/b.txt", b"b"),
-            ("sub/deep/c.txt", b"c"),
-        ] {
-            let p = root.join(path);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(p, body).unwrap();
-        }
+    #[test]
+    fn directory_operand_discovers_its_mount_but_symlink_stays_on_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("mounted");
+        std::fs::create_dir(&directory).unwrap();
+        assert_eq!(
+            mount_operand(&directory).unwrap(),
+            (directory.canonicalize().unwrap(), PathBuf::from("/"))
+        );
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&directory, &link).unwrap();
+        assert_eq!(
+            mount_operand(&link).unwrap(),
+            (root.path().canonicalize().unwrap(), PathBuf::from("/link"))
+        );
     }
-
-    fn names(entries: &[WalkEntry], prefix: &Path) -> Vec<String> {
-        entries
-            .iter()
-            .map(|e| {
-                e.path()
-                    .strip_prefix(prefix)
+    fn collect(config: Config, prune: bool) -> Vec<(String, usize)> {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("sub/deep")).unwrap();
+        std::fs::write(root.path().join("a.txt"), b"a").unwrap();
+        std::fs::write(root.path().join("sub/b.txt"), b"b").unwrap();
+        std::fs::write(root.path().join("sub/deep/c.txt"), b"c").unwrap();
+        let client = Mounted::new(root.path()).unwrap();
+        let mut out = Vec::new();
+        visit_backend(
+            &client,
+            Path::new("typed"),
+            Path::new("/"),
+            &config,
+            MetadataFields::stat(),
+            |entry| {
+                let name = entry
+                    .path()
+                    .strip_prefix("typed")
                     .unwrap()
                     .to_string_lossy()
-                    .into_owned()
-            })
-            .collect()
+                    .into_owned();
+                let control = if prune && name == "sub" {
+                    WalkControl::SkipSubtree
+                } else {
+                    WalkControl::Continue
+                };
+                out.push((name, entry.depth()));
+                control
+            },
+        )
+        .unwrap();
+        out
     }
-
-    fn enumerate_root(root: &Path, config: &Config) -> Vec<WalkEntry> {
-        let mut backend = Backend::Dummy(Mounted::new(root).expect("dummy root"));
-        enumerate_backend(&mut backend, root, Path::new("/"), config).expect("enumerate")
-    }
-
     #[test]
-    fn preorder_is_parent_before_child() {
-        let dir = tempfile::tempdir().unwrap();
-        tree(dir.path());
-        let entries = enumerate_root(dir.path(), &Config::default());
-        assert_eq!(entries[0].path(), dir.path());
-        assert_eq!(entries[0].depth(), 0);
-        for (i, entry) in entries.iter().enumerate() {
-            if entry.depth() == 0 {
-                continue;
-            }
-            let parent = entry.path().parent().unwrap();
-            assert!(
-                entries[..i]
-                    .iter()
-                    .any(|e| e.path() == parent && e.depth() + 1 == entry.depth()),
-                "parent of {:?} must appear first",
-                entry.path()
-            );
-        }
-    }
-
-    #[test]
-    fn depth_first_is_post_order() {
-        let dir = tempfile::tempdir().unwrap();
-        tree(dir.path());
-        let config = Config {
-            depth_first: true,
-            ..Config::default()
-        };
-        let entries = enumerate_root(dir.path(), &config);
-        let got = names(&entries, dir.path());
-        assert_eq!(got.last().unwrap(), "");
-        let sub = got.iter().position(|n| n == "sub").unwrap();
-        let deep = got.iter().position(|n| n == "sub/deep").unwrap();
-        let c = got.iter().position(|n| n == "sub/deep/c.txt").unwrap();
-        assert!(c < deep && deep < sub);
-    }
-
-    #[test]
-    fn sorted_output_orders_children_by_name() {
-        let dir = tempfile::tempdir().unwrap();
-        tree(dir.path());
-        let config = Config {
-            sorted_output: true,
-            ..Config::default()
-        };
-        let entries = enumerate_root(dir.path(), &config);
+    fn sorted_preorder_and_depth_are_preserved() {
         assert_eq!(
-            names(&entries, dir.path()),
+            collect(
+                Config {
+                    sorted_output: true,
+                    ..Config::default()
+                },
+                false
+            )
+            .iter()
+            .map(|x| x.0.as_str())
+            .collect::<Vec<_>>(),
             [
                 "",
                 "a.txt",
@@ -343,38 +180,72 @@ mod tests {
                 "sub/deep/c.txt"
             ]
         );
+        assert!(collect(
+            Config {
+                max_depth: 1,
+                ..Config::default()
+            },
+            false
+        )
+        .iter()
+        .all(|x| x.1 <= 1));
+        assert!(collect(
+            Config {
+                min_depth: 2,
+                ..Config::default()
+            },
+            false
+        )
+        .iter()
+        .all(|x| x.1 >= 2));
     }
-
     #[test]
-    fn depth_bounds_are_respected() {
-        let dir = tempfile::tempdir().unwrap();
-        tree(dir.path());
-        let config = Config {
-            max_depth: 1,
-            ..Config::default()
-        };
-        let entries = enumerate_root(dir.path(), &config);
-        assert!(entries.iter().all(|e| e.depth() <= 1));
-
-        let config = Config {
-            min_depth: 2,
-            ..Config::default()
-        };
-        let entries = enumerate_root(dir.path(), &config);
-        assert!(entries.iter().all(|e| e.depth() >= 2));
-        assert!(!names(&entries, dir.path()).is_empty());
-    }
-
-    #[test]
-    fn vfs_metadata_comes_from_the_listing() {
-        let dir = tempfile::tempdir().unwrap();
-        tree(dir.path());
-        let entries = enumerate_root(dir.path(), &Config::default());
-        let a = entries
+    fn postorder_and_prune_are_preserved() {
+        let out = collect(
+            Config {
+                depth_first: true,
+                ..Config::default()
+            },
+            false,
+        );
+        assert_eq!(out.last().unwrap().0, "");
+        let index = |name: &str| out.iter().position(|x| x.0 == name).unwrap();
+        assert!(index("sub/deep/c.txt") < index("sub/deep") && index("sub/deep") < index("sub"));
+        assert!(collect(Config::default(), true)
             .iter()
-            .find(|e| e.path().ends_with("a.txt"))
-            .unwrap();
-        assert!(a.file_type().is_file());
-        assert_eq!(a.metadata().unwrap().len(), 1);
+            .all(|x| !x.0.starts_with("sub/")));
+    }
+    #[test]
+    fn stop_is_immediate_and_symlink_root_is_not_followed() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("sub")).unwrap();
+        let client = Mounted::new(root.path()).unwrap();
+        let mut calls = 0;
+        visit_backend(
+            &client,
+            Path::new("typed"),
+            Path::new("/"),
+            &Config::default(),
+            MetadataFields::MODE,
+            |_| {
+                calls += 1;
+                WalkControl::Stop
+            },
+        )
+        .unwrap();
+        assert_eq!(calls, 1);
+        std::os::unix::fs::symlink("sub", root.path().join("link")).unwrap();
+        visit_backend(
+            &client,
+            Path::new("typed/link"),
+            Path::new("/link"),
+            &Config::default(),
+            MetadataFields::MODE,
+            |entry| {
+                assert!(entry.file_type().is_symlink());
+                WalkControl::Continue
+            },
+        )
+        .unwrap();
     }
 }

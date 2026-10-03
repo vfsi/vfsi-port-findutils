@@ -10,6 +10,10 @@ use super::{Matcher, MatcherIO, WalkEntry};
 pub struct QuitMatcher;
 
 impl Matcher for QuitMatcher {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        vnfs::MetadataFields::MODE
+    }
     fn matches(&self, _: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         matcher_io.quit();
         true

@@ -29,6 +29,14 @@ impl AndMatcher {
 }
 
 impl Matcher for AndMatcher {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        self.submatchers
+            .iter()
+            .fold(vnfs::MetadataFields::MODE, |fields, m| {
+                fields | m.metadata_fields()
+            })
+    }
     /// Returns true if all sub-matchers return true. Short-circuiting does take
     /// place. If the nth sub-matcher returns false, then we immediately return
     /// and don't make any further calls.
@@ -105,6 +113,14 @@ impl OrMatcher {
 }
 
 impl Matcher for OrMatcher {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        self.submatchers
+            .iter()
+            .fold(vnfs::MetadataFields::MODE, |fields, m| {
+                fields | m.metadata_fields()
+            })
+    }
     /// Returns true if any sub-matcher returns true. Short-circuiting does take
     /// place. If the nth sub-matcher returns true, then we immediately return
     /// and don't make any further calls.
@@ -203,6 +219,14 @@ impl ListMatcher {
 }
 
 impl Matcher for ListMatcher {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        self.submatchers
+            .iter()
+            .fold(vnfs::MetadataFields::MODE, |fields, m| {
+                fields | m.metadata_fields()
+            })
+    }
     /// Calls matches on all submatcher objects, with no short-circuiting.
     /// Returns the result of the call to the final submatcher
     fn matches(&self, dir_entry: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
@@ -310,6 +334,10 @@ impl ListMatcherBuilder {
 pub struct TrueMatcher;
 
 impl Matcher for TrueMatcher {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        vnfs::MetadataFields::MODE
+    }
     fn matches(&self, _dir_entry: &WalkEntry, _: &mut MatcherIO) -> bool {
         true
     }
@@ -319,6 +347,10 @@ impl Matcher for TrueMatcher {
 pub struct FalseMatcher;
 
 impl Matcher for FalseMatcher {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        vnfs::MetadataFields::MODE
+    }
     fn matches(&self, _dir_entry: &WalkEntry, _: &mut MatcherIO) -> bool {
         false
     }
@@ -338,6 +370,10 @@ impl NotMatcher {
 }
 
 impl Matcher for NotMatcher {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        self.submatcher.metadata_fields()
+    }
     fn matches(&self, dir_entry: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         !self.submatcher.matches(dir_entry, matcher_io)
     }

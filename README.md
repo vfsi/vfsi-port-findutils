@@ -53,8 +53,16 @@ At runtime, the `VNFS_IMPL` environment variable selects the backend:
 - `nfs` — the NFS server hosting the search root.
 
 Only the default `-P` mode (do not follow symlinks) and searches without `-x`
-use the VFSI path; every other mode, and any backend
-failure, falls back to the standard traversal, so output is unchanged.
+use the VFSI path. Mount discovery inherits the supported mount security,
+version, port and export root. Unsupported modes or failed connection setup
+use the standard traversal. Once matching begins, an error stops traversal;
+restarting could duplicate output, deletions or executed commands.
+
+Traversal is incremental between directories. `-prune` avoids listing the
+pruned directory, and `-quit` stops without fetching the remaining tree.
+Sorting buffers only a bounded directory/frontier, not the whole tree.
+Name/path/type-only expressions request minimal metadata; unknown matchers
+conservatively request the supported stat fields.
 
 Build and run with the feature enabled:
 
@@ -63,5 +71,6 @@ cargo build --release --features vnfs
 VNFS_IMPL=nfs target/release/find /path/on/nfs -type f
 ```
 
-Maturity: experimental. The high-level traversal builds against the published
-`vnfs` 0.0.15 release.
+Maturity: experimental. These traversal improvements currently use the
+development `vnfs` checkout; publish its new API before switching this port
+back to a registry dependency.

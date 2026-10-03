@@ -21,6 +21,10 @@ impl PathMatcher {
 }
 
 impl Matcher for PathMatcher {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        vnfs::MetadataFields::MODE
+    }
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
         let path = file_info.path().to_string_lossy();
         self.pattern.matches(&path)

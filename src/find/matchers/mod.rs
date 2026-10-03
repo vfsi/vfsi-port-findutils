@@ -202,6 +202,18 @@ impl MatcherIO<'_> {
 /// of building a chain of Matcher objects, and then walking a directory tree,
 /// passing each entry to the chain of Matchers.
 pub trait Matcher: 'static {
+    /// Fields required by this expression's VFSI traversal. Unknown/custom
+    /// matchers conservatively retain all supported stat fields.
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        vnfs::MetadataFields::stat()
+            | vnfs::MetadataFields::BLOCKS
+            | vnfs::MetadataFields::UID
+            | vnfs::MetadataFields::GID
+            | vnfs::MetadataFields::ATIME
+            | vnfs::MetadataFields::MTIME
+            | vnfs::MetadataFields::CTIME
+    }
     /// Boxes this matcher as a trait object.
     fn into_box(self) -> Box<dyn Matcher>
     where
@@ -233,6 +245,10 @@ pub trait Matcher: 'static {
 }
 
 impl Matcher for Box<dyn Matcher> {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        (**self).metadata_fields()
+    }
     fn into_box(self) -> Box<dyn Matcher> {
         self
     }

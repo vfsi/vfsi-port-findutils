@@ -21,6 +21,10 @@ impl NameMatcher {
 }
 
 impl Matcher for NameMatcher {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        vnfs::MetadataFields::MODE
+    }
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
         let name = file_info.file_name().to_string_lossy();
 

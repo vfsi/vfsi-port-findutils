@@ -16,6 +16,10 @@ impl PruneMatcher {
 }
 
 impl Matcher for PruneMatcher {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        vnfs::MetadataFields::MODE
+    }
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         if file_info.file_type().is_dir() {
             matcher_io.mark_current_dir_to_be_skipped();

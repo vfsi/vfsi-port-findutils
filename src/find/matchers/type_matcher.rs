@@ -59,6 +59,10 @@ impl TypeMatcher {
 }
 
 impl Matcher for TypeMatcher {
+    #[cfg(feature = "vnfs")]
+    fn metadata_fields(&self) -> vnfs::MetadataFields {
+        vnfs::MetadataFields::MODE
+    }
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
         self.file_type.contains(&file_info.file_type())
     }
