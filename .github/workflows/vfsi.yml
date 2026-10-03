@@ -1,0 +1,19 @@
+name: VFSI public package integration
+on:
+  push:
+    branches: [vfsi]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install NFS build dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang cmake libclang-dev libntirpc-dev liburcu-dev libkrb5-dev pkg-config
+      - name: Test published vnfs integration
+        run: cargo test --locked --features vnfs --lib
+      - name: Build application
+        run: cargo build --locked --features vnfs
