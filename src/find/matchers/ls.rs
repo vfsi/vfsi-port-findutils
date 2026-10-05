@@ -219,10 +219,7 @@ impl Ls {
             }
         };
         #[cfg(windows)]
-        let permission = {
-            use std::os::windows::fs::MetadataExt;
-            format_permissions(metadata.file_attributes())
-        };
+        let permission = format_permissions(metadata.file_attributes());
         #[cfg(not(windows))]
         let permission = "?---------";
         let hard_links = 0;

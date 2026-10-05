@@ -529,7 +529,6 @@ fn format_directive<'entry>(
         #[cfg(not(unix))]
         FormatDirective::Permissions(PermissionsFormat::Symbolic) => match meta()? {
             super::Meta::Std(m) => uucore::fs::display_permissions(m, true).into(),
-            super::Meta::Vfs(_) => "".into(),
         },
         #[cfg(not(unix))]
         FormatDirective::Permissions(PermissionsFormat::Octal) => "777".into(),
