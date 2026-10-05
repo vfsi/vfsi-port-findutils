@@ -1,9 +1,9 @@
 //! Incremental VFSI traversal. Pruning runs before reading a directory;
 //! once matching has begun, failures never replay side effects via walkdir.
-use super::matchers::{VfsMeta, WalkEntry};
+use super::matchers::WalkEntry;
 use super::{Config, Follow};
 use std::path::{Path, PathBuf};
-use vnfs::{Client, MetadataFields, Mounted, Nfs, WalkControl, WalkEventKind};
+use vnfs::{MetadataFields, Mounted, Nfs, Vfsi, VfsiExt, WalkControl, WalkEventKind};
 
 pub fn is_enabled() -> bool {
     matches!(std::env::var("VNFS_IMPL").as_deref(), Ok("dummy" | "nfs"))
@@ -59,7 +59,7 @@ fn mount_operand(typed: &Path) -> Option<(PathBuf, PathBuf)> {
     Some((base, vroot))
 }
 
-fn visit_backend<C: Client>(
+fn visit_backend<C: Vfsi>(
     client: &C,
     typed: &Path,
     vroot: &Path,
@@ -99,7 +99,7 @@ fn visit_backend<C: Client>(
                 path,
                 event.depth,
                 Follow::Never,
-                VfsMeta::from_metadata(event.entry.metadata()),
+                event.entry.metadata().clone(),
             );
             Ok(callback(entry))
         })

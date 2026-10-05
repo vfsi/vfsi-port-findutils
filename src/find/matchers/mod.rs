@@ -72,7 +72,9 @@ use std::{
 
 use super::{Config, Dependencies};
 
-pub use entry::{FileType, Meta, VfsMeta, WalkEntry, WalkError};
+#[cfg(all(target_os = "linux", feature = "vnfs"))]
+pub use entry::VfsMeta;
+pub use entry::{FileType, Meta, WalkEntry, WalkError};
 pub use regex::RegexType;
 
 /// Symlink following mode.

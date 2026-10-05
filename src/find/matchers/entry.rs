@@ -9,7 +9,7 @@ use std::io::{self, ErrorKind};
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use walkdir::DirEntry;
 
@@ -83,41 +83,9 @@ impl From<fs::FileType> for FileType {
     }
 }
 
-/// Metadata for an entry whose attributes came from a VFSI directory listing
-/// rather than a kernel `stat`.
-#[derive(Clone, Debug)]
-pub struct VfsMeta {
-    ptype: FileType,
-    len: u64,
-    mode: u32,
-    uid: u32,
-    gid: u32,
-    nlink: u64,
-    ino: u64,
-    blocks: u64,
-    atime: (i64, u32),
-    mtime: (i64, u32),
-    ctime: (i64, u32),
-}
-
+/// Retain VFSI metadata directly rather than copying it into another schema.
 #[cfg(all(target_os = "linux", feature = "vnfs"))]
-impl VfsMeta {
-    pub fn from_metadata(attrs: &vnfs::Metadata) -> Self {
-        Self {
-            ptype: FileType::from(attrs.file_type()),
-            len: attrs.len(),
-            mode: attrs.mode().unwrap_or_default(),
-            uid: attrs.uid().unwrap_or_default(),
-            gid: attrs.gid().unwrap_or_default(),
-            nlink: u64::from(attrs.nlink().unwrap_or_default()),
-            ino: attrs.file_id().unwrap_or_default(),
-            blocks: attrs.blocks().unwrap_or_default(),
-            atime: attrs.accessed().map_or((0, 0), system_time_parts),
-            mtime: attrs.modified().map_or((0, 0), system_time_parts),
-            ctime: attrs.changed().map_or((0, 0), system_time_parts),
-        }
-    }
-}
+pub type VfsMeta = vnfs::Metadata;
 
 #[cfg(all(target_os = "linux", feature = "vnfs"))]
 fn system_time_parts(time: std::time::SystemTime) -> (i64, u32) {
@@ -152,23 +120,12 @@ impl From<vnfs::FileType> for FileType {
     }
 }
 
-/// Convert an NFS `(seconds, nanoseconds)` timestamp to a `SystemTime`.
-fn system_time(seconds: i64, nanos: u32) -> SystemTime {
-    let base = if seconds >= 0 {
-        UNIX_EPOCH.checked_add(Duration::from_secs(seconds.unsigned_abs()))
-    } else {
-        UNIX_EPOCH.checked_sub(Duration::from_secs(seconds.unsigned_abs()))
-    }
-    .unwrap_or(UNIX_EPOCH);
-    base.checked_add(Duration::from_nanos(u64::from(nanos)))
-        .unwrap_or(base)
-}
-
 /// Metadata for a walked entry: either the kernel's `std::fs::Metadata` or the
 /// fields carried by a VFSI/NFS directory listing.
 #[derive(Clone, Debug)]
 pub enum Meta {
     Std(Metadata),
+    #[cfg(all(target_os = "linux", feature = "vnfs"))]
     Vfs(VfsMeta),
 }
 
@@ -176,7 +133,8 @@ impl Meta {
     pub fn file_type(&self) -> FileType {
         match self {
             Self::Std(m) => m.file_type().into(),
-            Self::Vfs(v) => v.ptype,
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.file_type().into(),
         }
     }
 
@@ -196,7 +154,8 @@ impl Meta {
     pub fn len(&self) -> u64 {
         match self {
             Self::Std(m) => m.len(),
-            Self::Vfs(v) => v.len,
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.len(),
         }
     }
 
@@ -210,7 +169,8 @@ impl Meta {
     pub fn mode(&self) -> u32 {
         match self {
             Self::Std(m) => m.mode(),
-            Self::Vfs(v) => v.mode,
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.mode().unwrap_or_default(),
         }
     }
 
@@ -218,7 +178,8 @@ impl Meta {
     pub fn uid(&self) -> u32 {
         match self {
             Self::Std(m) => m.uid(),
-            Self::Vfs(v) => v.uid,
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.uid().unwrap_or_default(),
         }
     }
 
@@ -226,7 +187,8 @@ impl Meta {
     pub fn gid(&self) -> u32 {
         match self {
             Self::Std(m) => m.gid(),
-            Self::Vfs(v) => v.gid,
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.gid().unwrap_or_default(),
         }
     }
 
@@ -234,7 +196,8 @@ impl Meta {
     pub fn nlink(&self) -> u64 {
         match self {
             Self::Std(m) => m.nlink(),
-            Self::Vfs(v) => v.nlink,
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => u64::from(v.nlink().unwrap_or_default()),
         }
     }
 
@@ -242,7 +205,8 @@ impl Meta {
     pub fn ino(&self) -> u64 {
         match self {
             Self::Std(m) => m.ino(),
-            Self::Vfs(v) => v.ino,
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.file_id().unwrap_or_default(),
         }
     }
 
@@ -251,6 +215,7 @@ impl Meta {
         match self {
             Self::Std(m) => m.dev(),
             // A single NFS export is one device.
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
             Self::Vfs(_) => 0,
         }
     }
@@ -259,7 +224,8 @@ impl Meta {
     pub fn blocks(&self) -> u64 {
         match self {
             Self::Std(m) => m.blocks(),
-            Self::Vfs(v) => v.blocks,
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.blocks().unwrap_or_default(),
         }
     }
 
@@ -267,7 +233,8 @@ impl Meta {
     pub fn atime(&self) -> i64 {
         match self {
             Self::Std(m) => m.atime(),
-            Self::Vfs(v) => v.atime.0,
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.accessed().map_or(0, |t| system_time_parts(t).0),
         }
     }
 
@@ -275,7 +242,10 @@ impl Meta {
     pub fn atime_nsec(&self) -> i64 {
         match self {
             Self::Std(m) => m.atime_nsec(),
-            Self::Vfs(v) => i64::from(v.atime.1),
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v
+                .accessed()
+                .map_or(0, |t| i64::from(system_time_parts(t).1)),
         }
     }
 
@@ -283,7 +253,8 @@ impl Meta {
     pub fn mtime(&self) -> i64 {
         match self {
             Self::Std(m) => m.mtime(),
-            Self::Vfs(v) => v.mtime.0,
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.modified().map_or(0, |t| system_time_parts(t).0),
         }
     }
 
@@ -291,7 +262,10 @@ impl Meta {
     pub fn mtime_nsec(&self) -> i64 {
         match self {
             Self::Std(m) => m.mtime_nsec(),
-            Self::Vfs(v) => i64::from(v.mtime.1),
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v
+                .modified()
+                .map_or(0, |t| i64::from(system_time_parts(t).1)),
         }
     }
 
@@ -299,7 +273,8 @@ impl Meta {
     pub fn ctime(&self) -> i64 {
         match self {
             Self::Std(m) => m.ctime(),
-            Self::Vfs(v) => v.ctime.0,
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.changed().map_or(0, |t| system_time_parts(t).0),
         }
     }
 
@@ -307,7 +282,8 @@ impl Meta {
     pub fn ctime_nsec(&self) -> i64 {
         match self {
             Self::Std(m) => m.ctime_nsec(),
-            Self::Vfs(v) => i64::from(v.ctime.1),
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.changed().map_or(0, |t| i64::from(system_time_parts(t).1)),
         }
     }
 
@@ -315,7 +291,8 @@ impl Meta {
     pub fn permissions(&self) -> Perms {
         match self {
             Self::Std(m) => Perms(m.permissions().mode() & 0o7777),
-            Self::Vfs(v) => Perms(v.mode & 0o7777),
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => Perms(v.mode().unwrap_or_default() & 0o7777),
         }
     }
 
@@ -324,6 +301,7 @@ impl Meta {
         use std::os::windows::fs::MetadataExt;
         match self {
             Self::Std(m) => m.file_attributes(),
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
             Self::Vfs(_) => 0,
         }
     }
@@ -331,14 +309,20 @@ impl Meta {
     pub fn modified(&self) -> io::Result<SystemTime> {
         match self {
             Self::Std(m) => m.modified(),
-            Self::Vfs(v) => Ok(system_time(v.mtime.0, v.mtime.1)),
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.modified().ok_or_else(|| {
+                io::Error::new(ErrorKind::Unsupported, "modification time was not supplied")
+            }),
         }
     }
 
     pub fn accessed(&self) -> io::Result<SystemTime> {
         match self {
             Self::Std(m) => m.accessed(),
-            Self::Vfs(v) => Ok(system_time(v.atime.0, v.atime.1)),
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
+            Self::Vfs(v) => v.accessed().ok_or_else(|| {
+                io::Error::new(ErrorKind::Unsupported, "access time was not supplied")
+            }),
         }
     }
 
@@ -346,6 +330,7 @@ impl Meta {
         match self {
             Self::Std(m) => m.created(),
             // NFS does not expose a creation timestamp here.
+            #[cfg(all(target_os = "linux", feature = "vnfs"))]
             Self::Vfs(_) => Err(io::Error::new(
                 ErrorKind::Unsupported,
                 "creation time is not available",
@@ -629,5 +614,47 @@ impl WalkEntry {
             }
             Entry::WalkDir(ent) => ent.path_is_symlink(),
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux", feature = "vnfs"))]
+mod vfsi_metadata_tests {
+    use super::*;
+    use vnfs::{MetadataFields, MetadataOptions, Mounted, VfsiExt};
+
+    #[test]
+    fn direct_metadata_keeps_missing_timestamps_missing_instead_of_epoch() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("file"), b"hello").unwrap();
+        let fs = Mounted::new(root.path()).unwrap();
+        let metadata = fs
+            .metadata_with_options("/file", MetadataOptions::new().fields(MetadataFields::MODE))
+            .unwrap();
+        let entry = WalkEntry::from_vfs("typed/file", 1, Follow::Never, metadata);
+        let cached = entry.metadata().unwrap();
+        assert!(cached.is_file());
+        assert_eq!(
+            cached.modified().unwrap_err().kind(),
+            ErrorKind::Unsupported
+        );
+        assert_eq!(
+            cached.accessed().unwrap_err().kind(),
+            ErrorKind::Unsupported
+        );
+        let full = Meta::Vfs(
+            fs.metadata_with_options(
+                "/file",
+                MetadataOptions::new().fields(MetadataFields::stat() | MetadataFields::MTIME),
+            )
+            .unwrap(),
+        );
+        assert_eq!(full.len(), 5);
+        assert_eq!(
+            full.modified().unwrap(),
+            std::fs::metadata(root.path().join("file"))
+                .unwrap()
+                .modified()
+                .unwrap()
+        );
     }
 }
