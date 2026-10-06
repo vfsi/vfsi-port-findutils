@@ -85,7 +85,7 @@ impl From<fs::FileType> for FileType {
 
 /// Retain VFSI metadata directly rather than copying it into another schema.
 #[cfg(all(target_os = "linux", feature = "vnfs"))]
-pub type VfsMeta = vnfs::Metadata;
+pub type VfsMeta = vnfs::Attrs;
 
 #[cfg(all(target_os = "linux", feature = "vnfs"))]
 fn system_time_parts(time: std::time::SystemTime) -> (i64, u32) {
@@ -620,7 +620,7 @@ impl WalkEntry {
 #[cfg(all(test, target_os = "linux", feature = "vnfs"))]
 mod vfsi_metadata_tests {
     use super::*;
-    use vnfs::{MetadataFields, MetadataOptions, Mounted, VfsiExt};
+    use vnfs::{Attributes, AttrsOptions, Mounted, VfsiExt};
 
     #[test]
     fn direct_metadata_keeps_missing_timestamps_missing_instead_of_epoch() {
@@ -628,7 +628,7 @@ mod vfsi_metadata_tests {
         std::fs::write(root.path().join("file"), b"hello").unwrap();
         let fs = Mounted::new(root.path()).unwrap();
         let metadata = fs
-            .metadata_with_options("/file", MetadataOptions::new().fields(MetadataFields::MODE))
+            .attrs_with_options("/file", AttrsOptions::new().fields(Attributes::MODE))
             .unwrap();
         let entry = WalkEntry::from_vfs("typed/file", 1, Follow::Never, metadata);
         let cached = entry.metadata().unwrap();
@@ -642,9 +642,9 @@ mod vfsi_metadata_tests {
             ErrorKind::Unsupported
         );
         let full = Meta::Vfs(
-            fs.metadata_with_options(
+            fs.attrs_with_options(
                 "/file",
-                MetadataOptions::new().fields(MetadataFields::stat() | MetadataFields::MTIME),
+                AttrsOptions::new().fields(Attributes::stat() | Attributes::MTIME),
             )
             .unwrap(),
         );

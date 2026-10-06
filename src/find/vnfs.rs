@@ -3,7 +3,7 @@
 use super::matchers::WalkEntry;
 use super::{Config, Follow};
 use std::path::{Path, PathBuf};
-use vnfs::{MetadataFields, Mounted, Nfs, Vfsi, VfsiExt, WalkControl, WalkEventKind};
+use vnfs::{Attributes, Mounted, Nfs, Vfsi, VfsiExt, WalkControl, WalkEventKind};
 
 pub fn is_enabled() -> bool {
     matches!(std::env::var("VNFS_IMPL").as_deref(), Ok("dummy" | "nfs"))
@@ -15,7 +15,7 @@ pub fn supports(config: &Config) -> bool {
 pub fn visit(
     dir: &str,
     config: &Config,
-    fields: MetadataFields,
+    fields: Attributes,
     callback: impl FnMut(WalkEntry) -> WalkControl,
 ) -> Option<vnfs::Result<()>> {
     let typed = Path::new(dir);
@@ -64,7 +64,7 @@ fn visit_backend<C: Vfsi>(
     typed: &Path,
     vroot: &Path,
     config: &Config,
-    fields: MetadataFields,
+    fields: Attributes,
     mut callback: impl FnMut(WalkEntry) -> WalkControl,
 ) -> vnfs::Result<()> {
     let defaults = client.limits().walk_options();
@@ -99,7 +99,7 @@ fn visit_backend<C: Vfsi>(
                 path,
                 event.depth,
                 Follow::Never,
-                event.entry.metadata().clone(),
+                event.entry.attrs().clone(),
             );
             Ok(callback(entry))
         })
@@ -138,7 +138,7 @@ mod tests {
             Path::new("typed"),
             Path::new("/"),
             &config,
-            MetadataFields::stat(),
+            Attributes::stat(),
             |entry| {
                 let name = entry
                     .path()
@@ -226,7 +226,7 @@ mod tests {
             Path::new("typed"),
             Path::new("/"),
             &Config::default(),
-            MetadataFields::MODE,
+            Attributes::MODE,
             |_| {
                 calls += 1;
                 WalkControl::Stop
@@ -240,7 +240,7 @@ mod tests {
             Path::new("typed/link"),
             Path::new("/link"),
             &Config::default(),
-            MetadataFields::MODE,
+            Attributes::MODE,
             |entry| {
                 assert!(entry.file_type().is_symlink());
                 WalkControl::Continue

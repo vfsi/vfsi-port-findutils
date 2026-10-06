@@ -207,14 +207,14 @@ pub trait Matcher: 'static {
     /// Fields required by this expression's VFSI traversal. Unknown/custom
     /// matchers conservatively retain all supported stat fields.
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
-    fn metadata_fields(&self) -> vnfs::MetadataFields {
-        vnfs::MetadataFields::stat()
-            | vnfs::MetadataFields::BLOCKS
-            | vnfs::MetadataFields::UID
-            | vnfs::MetadataFields::GID
-            | vnfs::MetadataFields::ATIME
-            | vnfs::MetadataFields::MTIME
-            | vnfs::MetadataFields::CTIME
+    fn metadata_fields(&self) -> vnfs::Attributes {
+        vnfs::Attributes::stat()
+            | vnfs::Attributes::BLOCKS
+            | vnfs::Attributes::UID
+            | vnfs::Attributes::GID
+            | vnfs::Attributes::ATIME
+            | vnfs::Attributes::MTIME
+            | vnfs::Attributes::CTIME
     }
     /// Boxes this matcher as a trait object.
     fn into_box(self) -> Box<dyn Matcher>
@@ -248,7 +248,7 @@ pub trait Matcher: 'static {
 
 impl Matcher for Box<dyn Matcher> {
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
-    fn metadata_fields(&self) -> vnfs::MetadataFields {
+    fn metadata_fields(&self) -> vnfs::Attributes {
         (**self).metadata_fields()
     }
     fn into_box(self) -> Box<dyn Matcher> {

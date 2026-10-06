@@ -30,10 +30,10 @@ impl AndMatcher {
 
 impl Matcher for AndMatcher {
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
-    fn metadata_fields(&self) -> vnfs::MetadataFields {
+    fn metadata_fields(&self) -> vnfs::Attributes {
         self.submatchers
             .iter()
-            .fold(vnfs::MetadataFields::MODE, |fields, m| {
+            .fold(vnfs::Attributes::MODE, |fields, m| {
                 fields | m.metadata_fields()
             })
     }
@@ -114,10 +114,10 @@ impl OrMatcher {
 
 impl Matcher for OrMatcher {
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
-    fn metadata_fields(&self) -> vnfs::MetadataFields {
+    fn metadata_fields(&self) -> vnfs::Attributes {
         self.submatchers
             .iter()
-            .fold(vnfs::MetadataFields::MODE, |fields, m| {
+            .fold(vnfs::Attributes::MODE, |fields, m| {
                 fields | m.metadata_fields()
             })
     }
@@ -220,10 +220,10 @@ impl ListMatcher {
 
 impl Matcher for ListMatcher {
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
-    fn metadata_fields(&self) -> vnfs::MetadataFields {
+    fn metadata_fields(&self) -> vnfs::Attributes {
         self.submatchers
             .iter()
-            .fold(vnfs::MetadataFields::MODE, |fields, m| {
+            .fold(vnfs::Attributes::MODE, |fields, m| {
                 fields | m.metadata_fields()
             })
     }
@@ -335,8 +335,8 @@ pub struct TrueMatcher;
 
 impl Matcher for TrueMatcher {
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
-    fn metadata_fields(&self) -> vnfs::MetadataFields {
-        vnfs::MetadataFields::MODE
+    fn metadata_fields(&self) -> vnfs::Attributes {
+        vnfs::Attributes::MODE
     }
     fn matches(&self, _dir_entry: &WalkEntry, _: &mut MatcherIO) -> bool {
         true
@@ -348,8 +348,8 @@ pub struct FalseMatcher;
 
 impl Matcher for FalseMatcher {
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
-    fn metadata_fields(&self) -> vnfs::MetadataFields {
-        vnfs::MetadataFields::MODE
+    fn metadata_fields(&self) -> vnfs::Attributes {
+        vnfs::Attributes::MODE
     }
     fn matches(&self, _dir_entry: &WalkEntry, _: &mut MatcherIO) -> bool {
         false
@@ -371,7 +371,7 @@ impl NotMatcher {
 
 impl Matcher for NotMatcher {
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
-    fn metadata_fields(&self) -> vnfs::MetadataFields {
+    fn metadata_fields(&self) -> vnfs::Attributes {
         self.submatcher.metadata_fields()
     }
     fn matches(&self, dir_entry: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {

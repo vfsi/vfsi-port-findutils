@@ -17,8 +17,8 @@ impl PruneMatcher {
 
 impl Matcher for PruneMatcher {
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
-    fn metadata_fields(&self) -> vnfs::MetadataFields {
-        vnfs::MetadataFields::MODE
+    fn metadata_fields(&self) -> vnfs::Attributes {
+        vnfs::Attributes::MODE
     }
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         if file_info.file_type().is_dir() {

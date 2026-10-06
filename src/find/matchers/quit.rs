@@ -11,8 +11,8 @@ pub struct QuitMatcher;
 
 impl Matcher for QuitMatcher {
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
-    fn metadata_fields(&self) -> vnfs::MetadataFields {
-        vnfs::MetadataFields::MODE
+    fn metadata_fields(&self) -> vnfs::Attributes {
+        vnfs::Attributes::MODE
     }
     fn matches(&self, _: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         matcher_io.quit();

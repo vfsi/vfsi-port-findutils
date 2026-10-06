@@ -71,8 +71,8 @@ impl Printer {
 
 impl Matcher for Printer {
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
-    fn metadata_fields(&self) -> vnfs::MetadataFields {
-        vnfs::MetadataFields::MODE
+    fn metadata_fields(&self) -> vnfs::Attributes {
+        vnfs::Attributes::MODE
     }
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         if let Some(file) = &self.output_file {
