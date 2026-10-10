@@ -83,10 +83,14 @@ impl SizeMatcher {
 
 impl Matcher for SizeMatcher {
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
-        match file_info.metadata() {
-            Ok(metadata) => self
+        match file_info
+            .metadata()
+            .map_err(std::io::Error::from)
+            .and_then(super::Meta::len)
+        {
+            Ok(size) => self
                 .value_to_match
-                .matches(byte_size_to_unit_size(self.unit, metadata.len())),
+                .matches(byte_size_to_unit_size(self.unit, size)),
             Err(e) => {
                 writeln!(
                     &mut stderr(),

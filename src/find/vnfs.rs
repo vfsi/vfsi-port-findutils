@@ -76,33 +76,52 @@ fn visit_backend<C: Vfsi>(
         defaults
     };
     client
-        .walk_events_with_options(vroot, fields, options, config.sorted_output, |event| {
-            let emit = match event.kind {
-                WalkEventKind::Entry => true,
-                WalkEventKind::Enter => !config.depth_first,
-                WalkEventKind::Leave => config.depth_first,
-            };
-            if !emit || event.depth < config.min_depth {
-                return Ok(WalkControl::Continue);
-            }
-            let relative = event
-                .entry
-                .path()
-                .strip_prefix(vroot)
-                .map_err(|_| vnfs::Error::client(0, 22))?;
-            let path = if relative.as_os_str().is_empty() {
-                typed.to_path_buf()
-            } else {
-                typed.join(relative)
-            };
-            let entry = WalkEntry::from_vfs(
-                path,
-                event.depth,
-                Follow::Never,
-                event.entry.attrs().clone(),
-            );
-            Ok(callback(entry))
-        })
+        .listdir(
+            vroot,
+            options
+                .fields(fields)
+                .recursive(true)
+                .enter_leave(true)
+                .sort_by_name(config.sorted_output),
+            |event| {
+                let emit = match event.kind {
+                    WalkEventKind::Entry => true,
+                    WalkEventKind::Enter => !config.depth_first,
+                    WalkEventKind::Leave => config.depth_first,
+                };
+                // listdir limits directory descent; find's -maxdepth also
+                // limits emitted files. Prune at the boundary, before listing.
+                let boundary =
+                    event.kind == WalkEventKind::Enter && event.depth >= config.max_depth;
+                if !emit || event.depth < config.min_depth || event.depth > config.max_depth {
+                    return Ok(if boundary {
+                        WalkControl::SkipSubtree
+                    } else {
+                        WalkControl::Continue
+                    });
+                }
+                let relative = event
+                    .entry
+                    .path()
+                    .strip_prefix(vroot)
+                    .map_err(|_| vnfs::Error::client(0, 22))?;
+                let path = if relative.as_os_str().is_empty() {
+                    typed.to_path_buf()
+                } else {
+                    typed.join(relative)
+                };
+                let entry = WalkEntry::from_vfs(
+                    path,
+                    event.depth,
+                    Follow::Never,
+                    event.entry.attrs().clone(),
+                );
+                Ok(match callback(entry) {
+                    WalkControl::Continue if boundary => WalkControl::SkipSubtree,
+                    decision => decision,
+                })
+            },
+        )
         .map(|_| ())
 }
 
@@ -125,7 +144,7 @@ mod tests {
             (root.path().canonicalize().unwrap(), PathBuf::from("/link"))
         );
     }
-    fn collect(config: Config, prune: bool) -> Vec<(String, usize)> {
+    fn collect(config: &Config, prune: bool) -> Vec<(String, usize)> {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("sub/deep")).unwrap();
         std::fs::write(root.path().join("a.txt"), b"a").unwrap();
@@ -137,7 +156,7 @@ mod tests {
             &client,
             Path::new("typed"),
             Path::new("/"),
-            &config,
+            config,
             Attributes::stat(),
             |entry| {
                 let name = entry
@@ -162,7 +181,7 @@ mod tests {
     fn sorted_preorder_and_depth_are_preserved() {
         assert_eq!(
             collect(
-                Config {
+                &Config {
                     sorted_output: true,
                     ..Config::default()
                 },
@@ -181,7 +200,7 @@ mod tests {
             ]
         );
         assert!(collect(
-            Config {
+            &Config {
                 max_depth: 1,
                 ..Config::default()
             },
@@ -190,7 +209,7 @@ mod tests {
         .iter()
         .all(|x| x.1 <= 1));
         assert!(collect(
-            Config {
+            &Config {
                 min_depth: 2,
                 ..Config::default()
             },
@@ -200,9 +219,42 @@ mod tests {
         .all(|x| x.1 >= 2));
     }
     #[test]
+    fn maxdepth_prunes_even_with_mindepth_and_postorder() {
+        assert_eq!(
+            collect(
+                &Config {
+                    max_depth: 0,
+                    ..Config::default()
+                },
+                false
+            ),
+            [(String::new(), 0)]
+        );
+        assert!(collect(
+            &Config {
+                min_depth: 2,
+                max_depth: 1,
+                ..Config::default()
+            },
+            false
+        )
+        .is_empty());
+        let out = collect(
+            &Config {
+                depth_first: true,
+                max_depth: 1,
+                ..Config::default()
+            },
+            false,
+        );
+        assert!(out.iter().all(|entry| entry.1 <= 1));
+        assert_eq!(out.last().unwrap().0, "");
+    }
+
+    #[test]
     fn postorder_and_prune_are_preserved() {
         let out = collect(
-            Config {
+            &Config {
                 depth_first: true,
                 ..Config::default()
             },
@@ -211,7 +263,7 @@ mod tests {
         assert_eq!(out.last().unwrap().0, "");
         let index = |name: &str| out.iter().position(|x| x.0 == name).unwrap();
         assert!(index("sub/deep/c.txt") < index("sub/deep") && index("sub/deep") < index("sub"));
-        assert!(collect(Config::default(), true)
+        assert!(collect(&Config::default(), true)
             .iter()
             .all(|x| !x.0.starts_with("sub/")));
     }

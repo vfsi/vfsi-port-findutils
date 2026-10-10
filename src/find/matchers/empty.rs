@@ -22,8 +22,12 @@ impl EmptyMatcher {
 impl Matcher for EmptyMatcher {
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
         if file_info.file_type().is_file() {
-            match file_info.metadata() {
-                Ok(meta) => meta.len() == 0,
+            match file_info
+                .metadata()
+                .map_err(std::io::Error::from)
+                .and_then(super::Meta::len)
+            {
+                Ok(size) => size == 0,
                 Err(err) => {
                     writeln!(
                         &mut stderr(),

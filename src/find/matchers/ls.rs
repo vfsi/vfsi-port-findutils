@@ -129,8 +129,19 @@ impl Ls {
         let metadata = file_info.metadata().unwrap();
 
         let inode_number = metadata.ino();
+        let size = match metadata.size() {
+            Ok(size) => size,
+            Err(error) => {
+                let _ = writeln!(
+                    &mut stderr(),
+                    "Error getting size for {}: {error}",
+                    file_info.path().display()
+                );
+                matcher_io.set_exit_code(1);
+                return;
+            }
+        };
         let number_of_blocks = {
-            let size = metadata.size();
             let number_of_blocks = size / 1024;
             let remainder = number_of_blocks % 4;
 
@@ -154,7 +165,6 @@ impl Ls {
             uucore::entries::uid2usr(metadata.uid()).unwrap_or_else(|_| metadata.uid().to_string());
         let group =
             uucore::entries::gid2grp(metadata.gid()).unwrap_or_else(|_| metadata.gid().to_string());
-        let size = metadata.size();
         let last_modified = {
             let system_time = metadata.modified().unwrap();
             let now_utc: DateTime<chrono::Utc> = system_time.into();
@@ -204,7 +214,9 @@ impl Ls {
         let metadata = file_info.metadata().unwrap();
 
         let inode_number = 0;
-        let size = metadata.len();
+        let size = metadata
+            .len()
+            .expect("standard metadata always supplies size");
         let number_of_blocks = {
             let number_of_blocks = size / 1024;
             let remainder = number_of_blocks % 4;

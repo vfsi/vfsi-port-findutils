@@ -151,17 +151,19 @@ impl Meta {
     }
 
     #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> u64 {
+    pub fn len(&self) -> io::Result<u64> {
         match self {
-            Self::Std(m) => m.len(),
+            Self::Std(m) => Ok(m.len()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(v) => v.len(),
+            Self::Vfs(v) => v.len().ok_or_else(|| {
+                io::Error::new(ErrorKind::Unsupported, "file size was not supplied")
+            }),
         }
     }
 
     /// `st_size`, mirroring `std::os::unix::fs::MetadataExt::size`.
     #[cfg(unix)]
-    pub fn size(&self) -> u64 {
+    pub fn size(&self) -> io::Result<u64> {
         self.len()
     }
 
@@ -623,6 +625,30 @@ mod vfsi_metadata_tests {
     use vnfs::{Attributes, AttrsOptions, Mounted, VfsiExt};
 
     #[test]
+    fn direct_size_matchers_reject_missing_size_and_accept_empty_files() {
+        use super::super::{empty::EmptyMatcher, size::SizeMatcher, ComparableValue, Matcher};
+        use crate::find::tests::FakeDependencies;
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("empty"), b"").unwrap();
+        let fs = Mounted::new(root.path()).unwrap();
+        let deps = FakeDependencies::new();
+        let mut matcher_io = super::super::MatcherIO::new(&deps);
+        let empty = EmptyMatcher::new();
+        let size = SizeMatcher::new(ComparableValue::EqualTo(0), "c").unwrap();
+        for (fields, expected) in [
+            (Attributes::MODE, false),
+            (Attributes::MODE | Attributes::SIZE, true),
+        ] {
+            let metadata = fs
+                .attrs_with_options("/empty", AttrsOptions::new().fields(fields))
+                .unwrap();
+            let entry = WalkEntry::from_vfs("typed/empty", 1, Follow::Never, metadata);
+            assert_eq!(empty.matches(&entry, &mut matcher_io), expected);
+            assert_eq!(size.matches(&entry, &mut matcher_io), expected);
+        }
+    }
+
+    #[test]
     fn direct_metadata_keeps_missing_timestamps_missing_instead_of_epoch() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("file"), b"hello").unwrap();
@@ -633,6 +659,7 @@ mod vfsi_metadata_tests {
         let entry = WalkEntry::from_vfs("typed/file", 1, Follow::Never, metadata);
         let cached = entry.metadata().unwrap();
         assert!(cached.is_file());
+        assert_eq!(cached.len().unwrap_err().kind(), ErrorKind::Unsupported);
         assert_eq!(
             cached.modified().unwrap_err().kind(),
             ErrorKind::Unsupported
@@ -648,7 +675,7 @@ mod vfsi_metadata_tests {
             )
             .unwrap(),
         );
-        assert_eq!(full.len(), 5);
+        assert_eq!(full.len().unwrap(), 5);
         assert_eq!(
             full.modified().unwrap(),
             std::fs::metadata(root.path().join("file"))

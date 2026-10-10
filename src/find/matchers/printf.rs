@@ -537,7 +537,7 @@ fn format_directive<'entry>(
             format!("{:>03o}", meta()?.mode() & 0o777).into()
         }
 
-        FormatDirective::Size => meta()?.len().to_string().into(),
+        FormatDirective::Size => meta()?.len()?.to_string().into(),
 
         #[cfg(not(unix))]
         FormatDirective::Sparseness => "1.0".into(),
@@ -545,12 +545,13 @@ fn format_directive<'entry>(
         FormatDirective::Sparseness => {
             let meta = meta()?;
 
-            if meta.len() > 0 {
+            let size = meta.len()?;
+            if size > 0 {
                 format!(
                     "{:.1}",
                     // GNU find hardcodes a block size of 512 bytes, regardless
                     // of the true filesystem block size.
-                    (meta.blocks() * STANDARD_BLOCK_SIZE) as f64 / (meta.len() as f64)
+                    (meta.blocks() * STANDARD_BLOCK_SIZE) as f64 / (size as f64)
                 )
                 .into()
             } else {
