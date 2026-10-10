@@ -424,7 +424,7 @@ fn format_directive<'entry>(
             #[cfg(unix)]
             let len = meta()?.blocks() * STANDARD_BLOCK_SIZE;
             #[cfg(not(unix))]
-            let len = meta()?.len();
+            let len = meta()?.len()?;
 
             // GNU find says it returns the number of 512-byte blocks for %b,
             // but in reality it just returns the number of blocks, *regardless
@@ -720,6 +720,23 @@ mod tests {
     use std::os::windows::fs::{symlink_dir, symlink_file};
 
     struct FailingWriter(ErrorKind);
+
+    #[cfg(not(unix))]
+    #[test]
+    fn block_directives_round_kernel_file_sizes() {
+        let root = Builder::new().prefix("printf-blocks").tempdir().unwrap();
+        for (bytes, small, large) in [(0, "0", "0"), (513, "2", "1"), (1025, "3", "2")] {
+            let path = root.path().join(format!("file-{bytes}"));
+            File::create(&path).unwrap().set_len(bytes).unwrap();
+            let entry = WalkEntry::new(path, 0, super::super::Follow::Never);
+            for (large_blocks, expected) in [(false, small), (true, large)] {
+                assert_eq!(
+                    format_directive(&entry, &FormatDirective::Blocks { large_blocks }).unwrap(),
+                    expected
+                );
+            }
+        }
+    }
 
     impl Write for FailingWriter {
         fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
