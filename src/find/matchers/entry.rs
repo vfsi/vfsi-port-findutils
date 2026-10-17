@@ -85,7 +85,7 @@ impl From<fs::FileType> for FileType {
 
 /// Retain VFSI metadata directly rather than copying it into another schema.
 #[cfg(all(target_os = "linux", feature = "vnfs"))]
-pub type VfsMeta = vnfs::Attrs;
+pub type VfsMeta = vnfs::directory::Attrs;
 
 #[cfg(all(target_os = "linux", feature = "vnfs"))]
 fn system_time_parts(time: std::time::SystemTime) -> (i64, u32) {
@@ -105,17 +105,17 @@ fn system_time_parts(time: std::time::SystemTime) -> (i64, u32) {
 }
 
 #[cfg(all(target_os = "linux", feature = "vnfs"))]
-impl From<vnfs::FileType> for FileType {
-    fn from(t: vnfs::FileType) -> Self {
+impl From<vnfs::directory::FileType> for FileType {
+    fn from(t: vnfs::directory::FileType) -> Self {
         match t {
-            vnfs::FileType::Regular => Self::Regular,
-            vnfs::FileType::Directory => Self::Directory,
-            vnfs::FileType::Symlink => Self::Symlink,
-            vnfs::FileType::BlockDevice => Self::BlockDevice,
-            vnfs::FileType::CharDevice => Self::CharDevice,
-            vnfs::FileType::Fifo => Self::Fifo,
-            vnfs::FileType::Socket => Self::Socket,
-            vnfs::FileType::Other(_) => Self::Unknown,
+            vnfs::directory::FileType::Regular => Self::Regular,
+            vnfs::directory::FileType::Directory => Self::Directory,
+            vnfs::directory::FileType::Symlink => Self::Symlink,
+            vnfs::directory::FileType::BlockDevice => Self::BlockDevice,
+            vnfs::directory::FileType::CharDevice => Self::CharDevice,
+            vnfs::directory::FileType::Fifo => Self::Fifo,
+            vnfs::directory::FileType::Socket => Self::Socket,
+            vnfs::directory::FileType::Other(_) => Self::Unknown,
         }
     }
 }
@@ -622,7 +622,9 @@ impl WalkEntry {
 #[cfg(all(test, target_os = "linux", feature = "vnfs"))]
 mod vfsi_metadata_tests {
     use super::*;
-    use vnfs::{Attributes, AttrsOptions, Mounted, VfsiExt};
+    use vnfs::directory::{Attributes, AttrsOptions};
+    use vnfs::files::VfsiExt;
+    use vnfs::posix::Posix;
 
     #[test]
     fn direct_size_matchers_reject_missing_size_and_accept_empty_files() {
@@ -630,7 +632,7 @@ mod vfsi_metadata_tests {
         use crate::find::tests::FakeDependencies;
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("empty"), b"").unwrap();
-        let fs = Mounted::new(root.path()).unwrap();
+        let fs = Posix::new(root.path()).unwrap();
         let deps = FakeDependencies::new();
         let mut matcher_io = super::super::MatcherIO::new(&deps);
         let empty = EmptyMatcher::new();
@@ -652,7 +654,7 @@ mod vfsi_metadata_tests {
     fn direct_metadata_keeps_missing_timestamps_missing_instead_of_epoch() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("file"), b"hello").unwrap();
-        let fs = Mounted::new(root.path()).unwrap();
+        let fs = Posix::new(root.path()).unwrap();
         let metadata = fs
             .attrs_with_options("/file", AttrsOptions::new().fields(Attributes::MODE))
             .unwrap();

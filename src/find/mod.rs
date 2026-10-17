@@ -393,12 +393,12 @@ fn process_vfsi(
         }
         if matcher_io.should_quit() {
             *quit = true;
-            return ::vnfs::WalkControl::Stop;
+            return ::vnfs::directory::WalkControl::Stop;
         }
         if matcher_io.should_skip_current_dir() {
-            return ::vnfs::WalkControl::SkipSubtree;
+            return ::vnfs::directory::WalkControl::SkipSubtree;
         }
-        ::vnfs::WalkControl::Continue
+        ::vnfs::directory::WalkControl::Continue
     })?;
     if let Err(error) = result {
         ret = 1;

@@ -3,7 +3,10 @@
 use super::matchers::WalkEntry;
 use super::{Config, Follow};
 use std::path::{Path, PathBuf};
-use vnfs::{Attributes, Mounted, Nfs, Vfsi, VfsiExt, WalkControl, WalkEventKind};
+use vnfs::directory::{Attributes, WalkControl, WalkEventKind};
+use vnfs::files::{Vfsi, VfsiExt};
+use vnfs::nfs::Nfs;
+use vnfs::posix::Posix;
 
 pub fn is_enabled() -> bool {
     matches!(std::env::var("VNFS_IMPL").as_deref(), Ok("dummy" | "nfs"))
@@ -22,7 +25,7 @@ pub fn visit(
     let (base, vroot) = mount_operand(typed)?;
     match std::env::var("VNFS_IMPL").as_deref() {
         Ok("dummy") => Some(visit_backend(
-            &Mounted::new(&base).ok()?,
+            &Posix::new(&base).ok()?,
             typed,
             &vroot,
             config,
@@ -150,7 +153,7 @@ mod tests {
         std::fs::write(root.path().join("a.txt"), b"a").unwrap();
         std::fs::write(root.path().join("sub/b.txt"), b"b").unwrap();
         std::fs::write(root.path().join("sub/deep/c.txt"), b"c").unwrap();
-        let client = Mounted::new(root.path()).unwrap();
+        let client = Posix::new(root.path()).unwrap();
         let mut out = Vec::new();
         visit_backend(
             &client,
@@ -271,7 +274,7 @@ mod tests {
     fn stop_is_immediate_and_symlink_root_is_not_followed() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir(root.path().join("sub")).unwrap();
-        let client = Mounted::new(root.path()).unwrap();
+        let client = Posix::new(root.path()).unwrap();
         let mut calls = 0;
         visit_backend(
             &client,
