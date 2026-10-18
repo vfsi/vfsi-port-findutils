@@ -642,7 +642,7 @@ mod vfsi_metadata_tests {
             (Attributes::MODE | Attributes::SIZE, true),
         ] {
             let metadata = fs
-                .attrs_with_options("/empty", AttrsOptions::new().fields(fields))
+                .attrs_with_options("/empty", AttrsOptions::new().with_fields(fields))
                 .unwrap();
             let entry = WalkEntry::from_vfs("typed/empty", 1, Follow::Never, metadata);
             assert_eq!(empty.matches(&entry, &mut matcher_io), expected);
@@ -656,7 +656,7 @@ mod vfsi_metadata_tests {
         std::fs::write(root.path().join("file"), b"hello").unwrap();
         let fs = Posix::new(root.path()).unwrap();
         let metadata = fs
-            .attrs_with_options("/file", AttrsOptions::new().fields(Attributes::MODE))
+            .attrs_with_options("/file", AttrsOptions::new().with_fields(Attributes::MODE))
             .unwrap();
         let entry = WalkEntry::from_vfs("typed/file", 1, Follow::Never, metadata);
         let cached = entry.metadata().unwrap();
@@ -673,7 +673,7 @@ mod vfsi_metadata_tests {
         let full = Meta::Vfs(
             fs.attrs_with_options(
                 "/file",
-                AttrsOptions::new().fields(Attributes::stat() | Attributes::MTIME),
+                AttrsOptions::new().with_fields(Attributes::stat() | Attributes::MTIME),
             )
             .unwrap(),
         );
