@@ -3,7 +3,7 @@
 use super::matchers::WalkEntry;
 use super::{Config, Follow};
 use std::path::{Path, PathBuf};
-use vnfs::directory::{Attributes, WalkControl, WalkEventKind};
+use vnfs::directory::{Attributes, DepthLimit, WalkControl, WalkEventKind};
 use vnfs::files::{Vfsi, VfsiExt};
 use vnfs::nfs::Nfs;
 use vnfs::posix::Posix;
@@ -71,10 +71,12 @@ fn visit_backend<C: Vfsi>(
     mut callback: impl FnMut(WalkEntry) -> WalkControl,
 ) -> vnfs::Result<()> {
     let defaults = client.limits().walk_options();
-    let options = if config.max_depth <= defaults.depth_limit() {
-        defaults
-            .max_depth(config.max_depth)
-            .truncate_at_max_depth(true)
+    let options = if config.max_depth <= defaults.max_depth().get() {
+        DepthLimit::new(config.max_depth).map_or(defaults, |depth| {
+            defaults
+                .with_max_depth(depth)
+                .with_truncate_at_max_depth(true)
+        })
     } else {
         defaults
     };
@@ -82,10 +84,10 @@ fn visit_backend<C: Vfsi>(
         .listdir(
             vroot,
             options
-                .fields(fields)
-                .recursive(true)
-                .enter_leave(true)
-                .sort_by_name(config.sorted_output),
+                .with_fields(fields)
+                .with_recursive(true)
+                .with_enter_leave(true)
+                .with_sort_by_name(config.sorted_output),
             |event| {
                 let emit = match event.kind {
                     WalkEventKind::Entry => true,
