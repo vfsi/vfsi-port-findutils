@@ -235,15 +235,17 @@ mod tests {
             ),
             [(String::new(), 0)]
         );
-        assert!(collect(
-            &Config {
-                min_depth: 2,
-                max_depth: 1,
-                ..Config::default()
-            },
-            false
-        )
-        .is_empty());
+        assert_eq!(
+            collect(
+                &Config {
+                    min_depth: 2,
+                    max_depth: 1,
+                    ..Config::default()
+                },
+                false
+            ),
+            Vec::<(String, usize)>::new()
+        );
         let out = collect(
             &Config {
                 depth_first: true,

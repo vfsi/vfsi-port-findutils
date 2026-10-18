@@ -4,10 +4,12 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
+pub mod error;
 pub mod matchers;
 #[cfg(all(target_os = "linux", feature = "vnfs"))]
 mod vnfs;
 
+use error::ParseError;
 use matchers::{Follow, WalkEntry};
 use std::cell::RefCell;
 use std::error::Error;
@@ -34,6 +36,9 @@ pub struct Config {
     /// Whether the expression uses -ok or -okdir, which prompt on stderr and
     /// read the answer from stdin when there is no terminal.
     interactive_exec: bool,
+    /// Shared by every -ls and -printf that writes to standard output, so
+    /// that a failed write is reported only once.
+    stdout_errors: matchers::StdoutErrors,
 }
 
 impl Default for Config {
@@ -54,6 +59,7 @@ impl Default for Config {
             follow: Follow::Never,
             files0_argument: None, // This option exclusively for -files0-from argument.
             interactive_exec: false,
+            stdout_errors: matchers::StdoutErrors::default(),
         }
     }
 }
@@ -241,7 +247,11 @@ fn parse_args(args: &[&str]) -> Result<ParsedInfo, Box<dyn Error>> {
     if i == paths_start {
         paths.push(".".to_string());
     }
-    let matcher = matchers::build_top_level_matcher(&args[i..], &mut config)?;
+    // The matcher builder only sees the expression part of the command line, so
+    // any argument index it reports has to be moved back to where that part
+    // started.
+    let matcher = matchers::build_top_level_matcher(&args[i..], &mut config)
+        .map_err(|e| ParseError::shift(e, i))?;
     let mut files0_paths = None;
     if let Some(name) = &config.files0_argument {
         if paths.len() == 1 && paths[0] == "." {
@@ -589,7 +599,17 @@ pub fn find_main(args: &[&str], deps: &dyn Dependencies) -> i32 {
     match do_find(&args[1..], deps) {
         Ok(ret) => ret,
         Err(e) => {
-            writeln!(&mut stderr(), "{}: {e}", program_name()).unwrap();
+            // `do_find` was handed argv without the program name.
+            let e = ParseError::shift(e, 1);
+            // Only at a terminal or with `UUTILS_DIAG=always`, so captured
+            // output (the GNU and bfs suites) keeps the single GNU line.
+            let rendered = uucore::diagnostics::enabled()
+                && e.downcast_ref::<ParseError>()
+                    .is_some_and(|parse_error| parse_error.render(args));
+            // The report heads itself with the same line.
+            if !rendered {
+                writeln!(&mut stderr(), "{}: {e}", program_name()).unwrap();
+            }
             1
         }
     }
@@ -617,7 +637,7 @@ mod tests {
     #[cfg(windows)]
     /// Windows-only bodge for converting between path separators.
     pub fn fix_up_slashes(path: &str) -> String {
-        path.replace("/", "\\")
+        path.replace('/', "\\")
     }
 
     #[cfg(not(windows))]
@@ -661,6 +681,7 @@ mod tests {
         }
 
         /// Queue a response to be returned by the next call to confirm().
+        #[cfg(unix)]
         pub fn push_confirm_response(&self, response: bool) {
             self.confirm_responses.borrow_mut().push_back(response);
         }

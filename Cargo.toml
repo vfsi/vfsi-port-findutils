@@ -4,6 +4,7 @@ version = "0.11.0"
 homepage = "https://github.com/uutils/findutils"
 repository = "https://github.com/uutils/findutils"
 edition = "2021"
+rust-version = "1.88.0"
 license = "MIT"
 readme = "README.md"
 description = "Rust implementation of GNU findutils"
@@ -24,7 +25,7 @@ faccess = "0.2.4"
 nix = { version = "0.31", features = ["fs", "user"] }
 onig = { version = "6.5", default-features = false }
 regex = "1.12"
-uucore = { version = "0.12.0", features = ["entries", "fs", "fsext", "mode"] }
+uucore = { version = "0.12.0", features = ["diagnostics", "entries", "fs", "fsext", "mode"] }
 walkdir = "2.5"
 itertools = "0.15.0"
 thiserror = "2.0.12"
@@ -90,11 +91,8 @@ name = "testing-commandline"
 path = "src/testing/commandline/main.rs"
 
 [profile.release]
-lto = "thin"
+lto = "fat"
 codegen-units = 1
-
-[profile.release-fast]
-inherits = "release"
 panic = "abort"
 
 # The profile that 'dist' (cargo-dist) builds release artifacts with.
