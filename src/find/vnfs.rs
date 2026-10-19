@@ -3,7 +3,7 @@
 use super::matchers::WalkEntry;
 use super::{Config, Follow};
 use std::path::{Path, PathBuf};
-use vnfs::directory::{Attributes, DepthLimit, WalkControl, WalkEventKind};
+use vnfs::directory::{Attributes, DepthLimit, WalkControl, WalkEventKind, WalkOptions};
 use vnfs::files::{Vfsi, VfsiExt};
 use vnfs::nfs::Nfs;
 use vnfs::posix::Posix;
@@ -70,8 +70,9 @@ fn visit_backend<C: Vfsi>(
     fields: Attributes,
     mut callback: impl FnMut(WalkEntry) -> WalkControl,
 ) -> vnfs::Result<()> {
-    let defaults = client.limits().walk_options();
-    let options = if config.max_depth <= defaults.max_depth().get() {
+    let limits = client.limits();
+    let defaults = limits.walk_options();
+    let options = if config.max_depth <= limits.max_walk_depth().get() {
         DepthLimit::new(config.max_depth).map_or(defaults, |depth| {
             defaults
                 .with_max_depth(depth)
@@ -83,9 +84,7 @@ fn visit_backend<C: Vfsi>(
     client
         .listdir(
             vroot,
-            options
-                .with_fields(fields)
-                .with_recursive(true)
+            WalkOptions::new(options.with_fields(fields).with_recursive(true))
                 .with_enter_leave(true)
                 .with_sort_by_name(config.sorted_output),
             |event| {
@@ -274,6 +273,49 @@ mod tests {
             .iter()
             .all(|x| !x.0.starts_with("sub/")));
     }
+    #[test]
+    fn client_depth_budget_is_preserved_with_explicit_unlimited_support() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("sub/deep")).unwrap();
+        for (limit, requested, fails) in [
+            (DepthLimit::new(0).unwrap(), usize::MAX, true),
+            (DepthLimit::new(0).unwrap(), 0, false),
+            (DepthLimit::unlimited(), usize::MAX, false),
+        ] {
+            let client = Posix::new(root.path())
+                .unwrap()
+                .with_limits(vnfs::files::ResourceLimits::new().with_max_walk_depth(limit));
+            let mut depths = Vec::new();
+            let result = visit_backend(
+                &client,
+                Path::new("typed"),
+                Path::new("/"),
+                &Config {
+                    max_depth: requested,
+                    ..Config::default()
+                },
+                Attributes::MODE,
+                |entry| {
+                    depths.push(entry.depth());
+                    WalkControl::Continue
+                },
+            );
+            if fails {
+                assert_eq!(result.unwrap_err().raw_code(), uucore::libc::EFBIG as u32);
+            } else {
+                result.unwrap();
+                assert_eq!(
+                    depths,
+                    if requested == 0 {
+                        vec![0]
+                    } else {
+                        vec![0, 1, 2]
+                    }
+                );
+            }
+        }
+    }
+
     #[test]
     fn stop_is_immediate_and_symlink_root_is_not_followed() {
         let root = tempfile::tempdir().unwrap();
