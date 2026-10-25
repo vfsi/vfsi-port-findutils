@@ -1594,11 +1594,10 @@ fn find_ls_shows_file_type_and_special_bits() {
     fs::create_dir(&sticky).unwrap();
     fs::set_permissions(&sticky, fs::Permissions::from_mode(0o1777)).unwrap();
 
-    for backend in [
-        "off",
-        #[cfg(all(target_os = "linux", feature = "vnfs"))]
-        "dummy",
-    ] {
+    let backends = std::iter::once("off");
+    #[cfg(all(target_os = "linux", feature = "vnfs"))]
+    let backends = backends.chain(std::iter::once("dummy"));
+    for backend in backends {
         ucmd()
             .env("VNFS_IMPL", backend)
             .args(&[temp_dir.path().to_str().unwrap(), "-ls"])
