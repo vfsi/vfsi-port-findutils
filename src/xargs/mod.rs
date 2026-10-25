@@ -593,6 +593,8 @@ impl<R: Read> Read for NonFatalPipeReader<R> {
 struct WhitespaceDelimitedArgumentReader<R: Read> {
     rd: NonFatalPipeReader<R>,
     pending: Vec<u8>,
+    // -I: each line is one argument, blanks inside it included.
+    whole_lines: bool,
 }
 
 impl<R> WhitespaceDelimitedArgumentReader<R>
@@ -603,6 +605,14 @@ where
         Self {
             rd: NonFatalPipeReader::new(rd),
             pending: vec![],
+            whole_lines: false,
+        }
+    }
+
+    fn whole_lines(rd: R) -> Self {
+        Self {
+            whole_lines: true,
+            ..Self::new(rd)
         }
     }
 }
@@ -677,12 +687,15 @@ where
                     in_argument = true;
                     escape = Some(Escape::Slash);
                 }
-                (None, c) if c.is_ascii_whitespace() => {
-                    if in_argument {
-                        terminated_by_newline = c == b'\n';
-                        break;
-                    }
+                (None, c @ (b' ' | b'\t' | b'\n'))
+                    if in_argument && (c == b'\n' || !self.whole_lines) =>
+                {
+                    terminated_by_newline = c == b'\n';
+                    break;
                 }
+                // Any isspace() byte is skipped before an argument, but only
+                // blanks and newlines end one, as in GNU xargs and POSIX.
+                (None, b' ' | b'\t' | b'\n' | b'\r' | b'\x0b' | b'\x0c') if !in_argument => {}
                 (None, c) => {
                     in_argument = true;
                     result.push(c);
@@ -977,9 +990,7 @@ fn normalize_options(options: Options, matches: &clap::ArgMatches) -> Options {
         }
         (Some(delimiter), false) => Some(delimiter),
         (None, true) => Some(b'\0'),
-        // If `replace` and no delimiter specified, each line of stdin turns into a line of stdout,
-        // so the input should be split at newlines only.
-        (None, false) => replace.as_ref().map(|_| b'\n'),
+        (None, false) => None,
     };
 
     let eof_delimiter = if delimiter.is_some() {
@@ -1249,6 +1260,8 @@ fn do_xargs(args: &[&str]) -> Result<CommandResult, XargsError> {
 
     let mut args: Box<dyn ArgumentReader> = if let Some(delimiter) = options.delimiter {
         Box::new(ByteDelimitedArgumentReader::new(args_file, delimiter))
+    } else if options.replace.is_some() {
+        Box::new(WhitespaceDelimitedArgumentReader::whole_lines(args_file))
     } else {
         Box::new(WhitespaceDelimitedArgumentReader::new(args_file))
     };
@@ -1600,6 +1613,32 @@ mod tests {
         let mut reader =
             WhitespaceDelimitedArgumentReader::new(ChunkReader::new(vec![Chunk::Data(b"x ''")]));
         assert_eq!(reader.next().unwrap().unwrap(), make_arg_soft("x"));
+        assert_eq!(reader.next().unwrap(), None);
+    }
+
+    #[test]
+    fn test_whitespace_delimited_reader_only_blanks_separate() {
+        // CR, VT and FF are skipped before an argument but are part of one.
+        let mut reader =
+            WhitespaceDelimitedArgumentReader::new(ChunkReader::new(vec![Chunk::Data(
+                b"\r\x0b\x0ca\rb\x0bc\x0cd e\r\n",
+            )]));
+        assert_eq!(
+            reader.next().unwrap().unwrap(),
+            make_arg_soft("a\rb\x0bc\x0cd")
+        );
+        assert_eq!(reader.next().unwrap().unwrap(), make_arg_hard("e\r"));
+        assert_eq!(reader.next().unwrap(), None);
+    }
+
+    #[test]
+    fn test_whitespace_delimited_reader_whole_lines() {
+        let mut reader =
+            WhitespaceDelimitedArgumentReader::whole_lines(ChunkReader::new(vec![Chunk::Data(
+                b" \t a 'b  c' \n\n  \nd\\\ne\n",
+            )]));
+        assert_eq!(reader.next().unwrap().unwrap(), make_arg_hard("a b  c "));
+        assert_eq!(reader.next().unwrap().unwrap(), make_arg_hard("d\ne"));
         assert_eq!(reader.next().unwrap(), None);
     }
 

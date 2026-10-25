@@ -634,3 +634,45 @@ fn xargs_non_utf8_argument_is_rejected_gracefully() {
         .stderr_contains("non-UTF-8")
         .no_stdout();
 }
+
+#[test]
+fn xargs_replace_reads_quoted_lines() {
+    // Like GNU: leading blanks and blank lines are skipped, quotes are
+    // removed, inner and trailing blanks stay, and -E still ends the input.
+    ucmd()
+        .args(&[
+            "-E",
+            "END",
+            "-I",
+            "{}",
+            &path_to_testing_commandline(),
+            "-",
+            "--no_print_cwd",
+            "[{}]",
+        ])
+        .pipe_in("  a b  \n\n''\n\t\"q r\" x\nEND\nlast\n")
+        .succeeds()
+        .stdout_only(
+            "args=\n--no_print_cwd\n[a b  ]\n\
+            args=\n--no_print_cwd\n[]\n\
+            args=\n--no_print_cwd\n[q r x]\n",
+        );
+}
+
+#[test]
+fn xargs_replace_unterminated_quote() {
+    // An unbalanced quote in a -I line is an error, as without -I.
+    ucmd()
+        .args(&[
+            "-I",
+            "{}",
+            &path_to_testing_commandline(),
+            "-",
+            "--no_print_cwd",
+            "[{}]",
+        ])
+        .pipe_in("it's\nb\n")
+        .fails_with_code(1)
+        .stderr_contains("Error: Unterminated quote:")
+        .no_stdout();
+}

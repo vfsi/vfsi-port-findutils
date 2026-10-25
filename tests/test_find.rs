@@ -401,6 +401,23 @@ fn files0_streams_before_invalid_utf8() {
         .stderr_contains("invalid utf-8 sequence");
 }
 
+/// A starting point given on the command line can't be mixed with
+/// -files0-from, even when it is `.`, the same path find uses by default.
+#[test]
+fn files0_with_file_operand_is_rejected() {
+    for operand in [".", "./test_data"] {
+        ucmd()
+            .args(&[operand, "-files0-from", "./test_data/simple/abbbc"])
+            .fails()
+            .code_is(1)
+            .no_stdout()
+            .stderr_is(format!(
+                "find: extra operand '{operand}'\n\
+                 find: file operands cannot be combined with -files0-from\n"
+            ));
+    }
+}
+
 /// Both the starting points and the answers to the prompts would be read from
 /// stdin, so GNU find rejects the combination up front (bfs `gnu/*_ok` tests).
 #[test]
@@ -616,6 +633,76 @@ fn regex_types() {
         .stdout_contains("teeest");
 }
 
+#[rstest::rstest]
+#[case::inherited(
+    &["-regextype", "posix-basic", "("],
+    &[")"],
+    "f1+"
+)]
+#[case::inherited_nested(
+    &["-regextype", "posix-basic", "(", "("],
+    &[")", ")"],
+    "f1+"
+)]
+#[case::propagated(
+    &["(", "-regextype", "posix-basic", ")"],
+    &[],
+    "f1+"
+)]
+#[case::propagated_nested(
+    &["(", "(", "-regextype", "posix-basic", ")", ")"],
+    &[],
+    "f1+"
+)]
+#[case::overridden(
+    &["-regextype", "posix-basic", "(", "-regextype", "posix-extended", ")"],
+    &[],
+    "f1"
+)]
+#[case::positional(
+    &[
+        "-regextype", "posix-extended", "-regex", ".*f[0-9]+",
+        "(", "-regextype", "posix-basic", ")", "!"
+    ],
+    &[],
+    "f1"
+)]
+#[case::short_circuited(
+    &["(", "-false", "-a", "-regextype", "posix-basic", ")", "-o", "("],
+    &[")"],
+    "f1+"
+)]
+fn regex_type_parentheses(
+    #[values("-regex", "-iregex")] predicate: &str,
+    #[case] before: &[&str],
+    #[case] after: &[&str],
+    #[case] expected: &str,
+) {
+    let temp_dir = Builder::new().prefix("find_regex_").tempdir().unwrap();
+    fs::create_dir(temp_dir.path().join("d")).unwrap();
+    File::create(temp_dir.path().join("d/f1")).unwrap();
+    File::create(temp_dir.path().join("d/f1+")).unwrap();
+
+    // Basic syntax matches the literal '+', while extended syntax matches f1.
+    let pattern = if predicate == "-iregex" {
+        ".*/F[0-9]+"
+    } else {
+        ".*/f[0-9]+"
+    };
+    ucmd()
+        .current_dir(temp_dir.path())
+        .env("LC_ALL", "C")
+        .arg("d")
+        .args(before)
+        .arg(predicate)
+        .arg(fix_up_regex_slashes(pattern))
+        .args(after)
+        .arg("-print")
+        .succeeds()
+        .no_stderr()
+        .stdout_only(fix_up_slashes(&format!("d/{expected}\n")));
+}
+
 #[test]
 fn empty_files() {
     let temp_dir = Builder::new().prefix("find_cmd_").tempdir().unwrap();
@@ -782,6 +869,16 @@ fn find_printf() {
 }
 
 #[test]
+fn find_printf_backslash_c_runs_the_next_action() {
+    ucmd()
+        .arg(fix_up_slashes("./test_data/simple"))
+        .args(&["-sorted", "-printf", "%f\\c%s\\n", "-printf", "|\\n"])
+        .succeeds()
+        .no_stderr()
+        .stdout_only("simple|\nabbbc|\nsubdir|\nABBBC|\n");
+}
+
+#[test]
 #[cfg(unix)] // %T+ prints local time; TZ only reliably selects it on unix
 fn find_printf_time_plus_fixed_width_fraction() {
     let temp_dir = Builder::new().prefix("find_time_plus_").tempdir().unwrap();
@@ -807,6 +904,71 @@ fn find_printf_time_plus_fixed_width_fraction() {
             .succeeds()
             .stdout_only(expected);
     }
+}
+
+#[test]
+#[cfg(unix)] // TZ only reliably selects the local time zone on unix
+fn find_newermt_uses_local_time() {
+    let temp_dir = Builder::new().prefix("find_newermt_").tempdir().unwrap();
+    // 1999-12-31 23:00 and 2000-01-01 04:00 UTC
+    for (name, secs) in [("early", 946_681_200), ("late", 946_699_200)] {
+        let file_path = temp_dir.path().join(name);
+        File::create(&file_path).expect("create test file");
+        filetime::set_file_mtime(&file_path, filetime::FileTime::from_unix_time(secs, 0))
+            .expect("set test file mtime");
+    }
+
+    // 03:00 is 03:00 UTC in UTC0 and 22:00 UTC the day before in UTC-5.
+    for (tz, expected) in [("UTC0", "late\n"), ("UTC-5", "early\nlate\n")] {
+        let result = ucmd()
+            .env("TZ", tz)
+            .arg(temp_dir.path())
+            .args(&[
+                "-type",
+                "f",
+                "-newermt",
+                "2000-01-01 03:00:00",
+                "-printf",
+                "%f\n",
+            ])
+            .succeeds();
+        let mut names: Vec<_> = result.stdout_str().lines().collect();
+        names.sort_unstable();
+        assert_eq!(names.join("\n") + "\n", expected, "TZ={tz}");
+    }
+}
+
+#[test]
+fn find_printf_octal_escapes_write_raw_bytes() {
+    use std::fmt::Write as _;
+
+    let mut format = String::from("é");
+    for value in 0..=0o777 {
+        write!(format, "\\{value:03o}").unwrap();
+    }
+    format.push_str("€%f\\n");
+    let bytes = (0..=u8::MAX).chain(0..=u8::MAX).collect::<Vec<_>>();
+    let expected = ["é".as_bytes(), &bytes, "€simple\n".as_bytes()].concat();
+
+    ucmd()
+        .args(&["test_data/simple", "-maxdepth", "0", "-printf", &format])
+        .succeeds()
+        .no_stderr()
+        .stdout_is_bytes(&expected);
+
+    let temp_dir = Builder::new()
+        .prefix("find_fprintf_octal_")
+        .tempdir()
+        .unwrap();
+    let output = temp_dir.path().join("out");
+    ucmd()
+        .args(&["test_data/simple", "-maxdepth", "0", "-fprintf"])
+        .arg(&output)
+        .arg(&format)
+        .succeeds()
+        .no_stderr()
+        .stdout_is_bytes(b"");
+    assert_eq!(fs::read(output).unwrap(), expected);
 }
 
 #[test]
@@ -890,6 +1052,23 @@ fn find_printf_width_too_large() {
 }
 
 #[test]
+fn find_printf_precision_too_large() {
+    // GNU find prints nothing for a precision above INT_MAX, goes on, and
+    // fails with EOVERFLOW instead of trying to pad that far.
+    ucmd()
+        .args(&[
+            "./test_data/simple",
+            "-maxdepth",
+            "0",
+            "-printf",
+            "%.2147483648d%.99999999999999999999m|%.2147483647f|\\n",
+        ])
+        .fails_with_code(1)
+        .stdout_is("|simple|\n")
+        .stderr_contains("'standard output': Value too large for defined data type");
+}
+
+#[test]
 fn find_printf_multibyte_char_after_directive() {
     ucmd()
         .args(&["./test_data/simple", "-maxdepth", "0", "-printf", "%€\\n"])
@@ -913,6 +1092,53 @@ fn find_perm() {
     ucmd().args(&["-perm", "+rwx"]).succeeds();
     ucmd().args(&["-perm", "u+rwX"]).succeeds();
     ucmd().args(&["-perm", "u=g"]).succeeds();
+}
+
+#[cfg(unix)]
+#[test]
+fn find_perm_directory_symbolic_modes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = Builder::new().prefix("find_perm_").tempdir().unwrap();
+    for (name, mode, is_dir) in [
+        ("d600", 0o600, true),
+        ("d700", 0o700, true),
+        ("f600", 0o600, false),
+        ("f700", 0o700, false),
+    ] {
+        let path = temp_dir.path().join(name);
+        if is_dir {
+            fs::create_dir(&path).unwrap();
+        } else {
+            File::create(&path).unwrap();
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    for (pattern, expected) in [
+        ("u=rwX", "d700\nf600\n"),
+        ("-u+X", "d700\nf600\nf700\n"),
+        ("/u+X", "d700\nf600\nf700\n"),
+        ("u=rw", "d600\nf600\n"),
+        ("700", "d700\nf700\n"),
+    ] {
+        ucmd()
+            .current_dir(temp_dir.path())
+            .args(&[
+                "d600",
+                "d700",
+                "f600",
+                "f700",
+                "-maxdepth",
+                "0",
+                "-perm",
+                pattern,
+                "-print",
+            ])
+            .succeeds()
+            .no_stderr()
+            .stdout_is(expected);
+    }
 }
 
 #[cfg(unix)]
@@ -1194,6 +1420,10 @@ fn find_newer_xy() {
         "jan 01, 2000 00:00:00",
         "2000-01-01",
         "2000-01-01 00:00:00",
+        "2000-01-01T00:00",
+        "1 Jan 2000",
+        "@946684800",
+        "yesterday",
     ];
 
     for arg in args {
@@ -1419,6 +1649,54 @@ fn find_fprintf() {
 }
 
 #[test]
+#[cfg(unix)]
+fn find_printf_dirname_keeps_doubled_slash() {
+    // %h is everything before the last slash, so %h/%f gives back %p.
+    ucmd()
+        .args(&[
+            "test_data/simple//",
+            "-sorted",
+            "-mindepth",
+            "1",
+            "-printf",
+            "%h|%f|%p\n",
+        ])
+        .succeeds()
+        .stdout_only(
+            "test_data/simple/|abbbc|test_data/simple//abbbc\n\
+            test_data/simple/|subdir|test_data/simple//subdir\n\
+            test_data/simple//subdir|ABBBC|test_data/simple//subdir/ABBBC\n",
+        );
+
+    ucmd()
+        .args(&["test_data/simple//subdir//ABBBC", "-printf", "%h|%f\n"])
+        .succeeds()
+        .stdout_only("test_data/simple//subdir/|ABBBC\n");
+}
+
+#[test]
+#[cfg(unix)]
+fn find_printf_path_keeps_trailing_slash() {
+    // %p should print a starting point exactly like -print does.
+    ucmd()
+        .args(&[
+            "test_data/simple/",
+            "-maxdepth",
+            "0",
+            "-printf",
+            "%p\n",
+            "-print",
+        ])
+        .succeeds()
+        .stdout_only("test_data/simple/\ntest_data/simple/\n");
+
+    ucmd()
+        .args(&["test_data/simple//", "-name", "abbbc", "-printf", "%p|%P\n"])
+        .succeeds()
+        .stdout_only("test_data/simple//abbbc|abbbc\n");
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn find_fprintf_reports_write_error() {
     let result = ucmd()
@@ -1457,12 +1735,52 @@ fn find_ls() {
 }
 
 #[test]
+#[cfg(unix)] // TZ only reliably selects the local time zone on unix
+fn find_ls_uses_local_time() {
+    use chrono::{DateTime, FixedOffset};
+
+    let temp_dir = Builder::new().prefix("find_ls_time_").tempdir().unwrap();
+    let file_path = temp_dir.path().join("stamped");
+    File::create(&file_path).expect("create test file");
+    // An hour ago, so the date column shows the time of day.
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        - 3600;
+    filetime::set_file_mtime(&file_path, filetime::FileTime::from_unix_time(secs, 0))
+        .expect("set test file mtime");
+
+    // POSIX TZ "UTC-5" is five hours east of UTC.
+    let expected = DateTime::from_timestamp(secs, 0)
+        .unwrap()
+        .with_timezone(&FixedOffset::east_opt(5 * 3600).unwrap())
+        .format("%b %e %H:%M")
+        .to_string();
+    let result = ucmd()
+        .env("TZ", "UTC-5")
+        .arg(&file_path)
+        .arg("-ls")
+        .succeeds();
+    assert!(
+        result.stdout_str().contains(&expected),
+        "{} does not contain {expected}",
+        result.stdout_str()
+    );
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn find_reports_stdout_write_error_once() {
     for actions in [
-        &["-ls", "-ls"][..],
+        &[][..],
+        &["-print"],
+        &["-print0"],
+        &["-ls", "-ls"],
         &["-printf", "%p\n"],
         &["-ls", "-printf", "%p\n"],
+        &["-print", "-ls"],
+        &["-print0", "-ls"],
     ] {
         let dev_full = fs::OpenOptions::new()
             .write(true)
@@ -1482,7 +1800,7 @@ fn find_reports_stdout_write_error_once() {
 fn find_stops_when_stdout_pipe_is_closed() {
     let temp_dir = Builder::new().prefix("find_closed_pipe").tempdir().unwrap();
     let printed = temp_dir.path().join("printed");
-    for action in [&["-ls"][..], &["-printf", "%p\n"]] {
+    for action in [&["-print"][..], &["-ls"], &["-printf", "%p\n"]] {
         let (reader, writer) = std::io::pipe().unwrap();
         drop(reader);
         ucmd()
@@ -1523,6 +1841,31 @@ fn find_ls_shows_file_type_and_special_bits() {
             .stdout_contains(" lrwx")
             .stdout_contains(" drwxrwxrwt ");
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn find_ls_shows_allocated_blocks_and_link_target() {
+    use std::os::unix::fs::MetadataExt;
+
+    let temp_dir = Builder::new().prefix("find_ls_blocks").tempdir().unwrap();
+    let file = temp_dir.path().join("sparse");
+    File::create(&file)
+        .unwrap()
+        .set_len(10 * 1024 * 1024)
+        .unwrap();
+    symlink("sparse", temp_dir.path().join("link")).unwrap();
+
+    // the 1 KiB blocks actually allocated, not the size rounded up
+    let blocks = fs::metadata(&file).unwrap().blocks().div_ceil(2);
+    let result = ucmd().args(&[file.to_str().unwrap(), "-ls"]).succeeds();
+    let fields: Vec<&str> = result.stdout_str().split_whitespace().collect();
+    assert_eq!(fields[1], blocks.to_string());
+
+    ucmd()
+        .args(&[temp_dir.path().join("link").to_str().unwrap(), "-ls"])
+        .succeeds()
+        .stdout_contains(" -> sparse\n");
 }
 
 // Regression test for uutils/findutils#717: `-ls` used to abort (exit 101) when
