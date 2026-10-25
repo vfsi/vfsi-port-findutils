@@ -782,6 +782,16 @@ fn find_printf() {
 }
 
 #[test]
+fn find_printf_backslash_c_runs_the_next_action() {
+    ucmd()
+        .arg(fix_up_slashes("./test_data/simple"))
+        .args(&["-sorted", "-printf", "%f\\c%s\\n", "-printf", "|\\n"])
+        .succeeds()
+        .no_stderr()
+        .stdout_only("simple|\nabbbc|\nsubdir|\nABBBC|\n");
+}
+
+#[test]
 #[cfg(unix)] // %T+ prints local time; TZ only reliably selects it on unix
 fn find_printf_time_plus_fixed_width_fraction() {
     let temp_dir = Builder::new().prefix("find_time_plus_").tempdir().unwrap();
@@ -807,6 +817,71 @@ fn find_printf_time_plus_fixed_width_fraction() {
             .succeeds()
             .stdout_only(expected);
     }
+}
+
+#[test]
+#[cfg(unix)] // TZ only reliably selects the local time zone on unix
+fn find_newermt_uses_local_time() {
+    let temp_dir = Builder::new().prefix("find_newermt_").tempdir().unwrap();
+    // 1999-12-31 23:00 and 2000-01-01 04:00 UTC
+    for (name, secs) in [("early", 946_681_200), ("late", 946_699_200)] {
+        let file_path = temp_dir.path().join(name);
+        File::create(&file_path).expect("create test file");
+        filetime::set_file_mtime(&file_path, filetime::FileTime::from_unix_time(secs, 0))
+            .expect("set test file mtime");
+    }
+
+    // 03:00 is 03:00 UTC in UTC0 and 22:00 UTC the day before in UTC-5.
+    for (tz, expected) in [("UTC0", "late\n"), ("UTC-5", "early\nlate\n")] {
+        let result = ucmd()
+            .env("TZ", tz)
+            .arg(temp_dir.path())
+            .args(&[
+                "-type",
+                "f",
+                "-newermt",
+                "2000-01-01 03:00:00",
+                "-printf",
+                "%f\n",
+            ])
+            .succeeds();
+        let mut names: Vec<_> = result.stdout_str().lines().collect();
+        names.sort_unstable();
+        assert_eq!(names.join("\n") + "\n", expected, "TZ={tz}");
+    }
+}
+
+#[test]
+fn find_printf_octal_escapes_write_raw_bytes() {
+    use std::fmt::Write as _;
+
+    let mut format = String::from("é");
+    for value in 0..=0o777 {
+        write!(format, "\\{value:03o}").unwrap();
+    }
+    format.push_str("€%f\\n");
+    let bytes = (0..=u8::MAX).chain(0..=u8::MAX).collect::<Vec<_>>();
+    let expected = ["é".as_bytes(), &bytes, "€simple\n".as_bytes()].concat();
+
+    ucmd()
+        .args(&["test_data/simple", "-maxdepth", "0", "-printf", &format])
+        .succeeds()
+        .no_stderr()
+        .stdout_is_bytes(&expected);
+
+    let temp_dir = Builder::new()
+        .prefix("find_fprintf_octal_")
+        .tempdir()
+        .unwrap();
+    let output = temp_dir.path().join("out");
+    ucmd()
+        .args(&["test_data/simple", "-maxdepth", "0", "-fprintf"])
+        .arg(&output)
+        .arg(&format)
+        .succeeds()
+        .no_stderr()
+        .stdout_is_bytes(b"");
+    assert_eq!(fs::read(output).unwrap(), expected);
 }
 
 #[test]
@@ -1194,6 +1269,10 @@ fn find_newer_xy() {
         "jan 01, 2000 00:00:00",
         "2000-01-01",
         "2000-01-01 00:00:00",
+        "2000-01-01T00:00",
+        "1 Jan 2000",
+        "@946684800",
+        "yesterday",
     ];
 
     for arg in args {
@@ -1460,9 +1539,14 @@ fn find_ls() {
 #[cfg(target_os = "linux")]
 fn find_reports_stdout_write_error_once() {
     for actions in [
-        &["-ls", "-ls"][..],
+        &[][..],
+        &["-print"],
+        &["-print0"],
+        &["-ls", "-ls"],
         &["-printf", "%p\n"],
         &["-ls", "-printf", "%p\n"],
+        &["-print", "-ls"],
+        &["-print0", "-ls"],
     ] {
         let dev_full = fs::OpenOptions::new()
             .write(true)
@@ -1482,7 +1566,7 @@ fn find_reports_stdout_write_error_once() {
 fn find_stops_when_stdout_pipe_is_closed() {
     let temp_dir = Builder::new().prefix("find_closed_pipe").tempdir().unwrap();
     let printed = temp_dir.path().join("printed");
-    for action in [&["-ls"][..], &["-printf", "%p\n"]] {
+    for action in [&["-print"][..], &["-ls"], &["-printf", "%p\n"]] {
         let (reader, writer) = std::io::pipe().unwrap();
         drop(reader);
         ucmd()
@@ -1523,6 +1607,31 @@ fn find_ls_shows_file_type_and_special_bits() {
             .stdout_contains(" lrwx")
             .stdout_contains(" drwxrwxrwt ");
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn find_ls_shows_allocated_blocks_and_link_target() {
+    use std::os::unix::fs::MetadataExt;
+
+    let temp_dir = Builder::new().prefix("find_ls_blocks").tempdir().unwrap();
+    let file = temp_dir.path().join("sparse");
+    File::create(&file)
+        .unwrap()
+        .set_len(10 * 1024 * 1024)
+        .unwrap();
+    symlink("sparse", temp_dir.path().join("link")).unwrap();
+
+    // the 1 KiB blocks actually allocated, not the size rounded up
+    let blocks = fs::metadata(&file).unwrap().blocks().div_ceil(2);
+    let result = ucmd().args(&[file.to_str().unwrap(), "-ls"]).succeeds();
+    let fields: Vec<&str> = result.stdout_str().split_whitespace().collect();
+    assert_eq!(fields[1], blocks.to_string());
+
+    ucmd()
+        .args(&[temp_dir.path().join("link").to_str().unwrap(), "-ls"])
+        .succeeds()
+        .stdout_contains(" -> sparse\n");
 }
 
 // Regression test for uutils/findutils#717: `-ls` used to abort (exit 101) when

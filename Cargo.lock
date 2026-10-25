@@ -147,7 +147,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "shlex",
- "syn 3.0.3",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -652,6 +652,7 @@ dependencies = [
  "itertools 0.15.0",
  "nix 0.31.3",
  "onig",
+ "parse_datetime",
  "regex",
  "rstest",
  "rustix",
@@ -989,9 +990,9 @@ dependencies = [
 
 [[package]]
 name = "libntirpc-sys"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73dcebf725cfc5496e2c200c7aaba14f8c40ecc3c49b68f9339270b75ef49c92"
+checksum = "53598d8ac548008245e75c0c70370f8553aa882bd0dd9e6f75135fd6976fc5ff"
 dependencies = [
  "bindgen",
  "cc",
@@ -1149,6 +1150,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad5fd71b79026fb918650dde6d125000a233764f1c2f1659a1c71118e33ea08f"
 dependencies = [
  "unicode-width",
+]
+
+[[package]]
+name = "parse_datetime"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb51967a779ef73b125a243688e53e4bb2474f91cae72734ee5051e857fb2645"
+dependencies = [
+ "jiff",
+ "num-traits",
+ "winnow",
 ]
 
 [[package]]
@@ -1365,9 +1377,9 @@ dependencies = [
 
 [[package]]
 name = "rstest"
-version = "0.27.0"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "948203e6d13b83e51a90d7cf236dd58a0065f23f4b902f00f306e7eb2bd09b9c"
+checksum = "b376e512f30a7686a8dbc6aeaace99b3ade1c26c1c63473473a817ade226dafc"
 dependencies = [
  "futures-timer",
  "futures-util",
@@ -1376,9 +1388,9 @@ dependencies = [
 
 [[package]]
 name = "rstest_macros"
-version = "0.27.0"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8d92eaf7b6e51e12471d71ddc72608e7151573de44099aacfbb1128177c0da4"
+checksum = "88512dbfb5b73a0dfa38aef7bc73b5657035fce477b923faf12d332dd83051ea"
 dependencies = [
  "cfg-if",
  "glob",
@@ -1878,9 +1890,9 @@ dependencies = [
 
 [[package]]
 name = "vnfs"
-version = "0.0.25"
+version = "0.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04a26b7cc7dc67a6f389cae2731f0d98b03179f037fd35b231765b91b37d32d9"
+checksum = "e0793373d3dbaec542c548193d1e28d583419b3e1449448836b3fa8e284f443b"
 dependencies = [
  "bitfields",
  "libc",

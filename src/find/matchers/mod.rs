@@ -59,7 +59,6 @@ use self::time::{
 use self::type_matcher::{TypeMatcher, XtypeMatcher};
 use self::user::{NoUserMatcher, UserMatcher};
 use ::regex::Regex;
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
 use fs::FileSystemMatcher;
 use ls::Ls;
 use std::{
@@ -204,9 +203,9 @@ impl MatcherIO<'_> {
     }
 }
 
-/// Handles failed writes to standard output for `-ls` and `-printf`. A closed
-/// pipe ends the walk; any other error is reported once for the whole command
-/// and makes find exit with status 1.
+/// Handles failed writes to standard output. A closed pipe ends the walk; any
+/// other error is reported once for the whole command and makes find exit with
+/// status 1.
 #[derive(Clone, Default)]
 pub(crate) struct StdoutErrors {
     reported: Rc<Cell<bool>>,
@@ -341,7 +340,10 @@ pub fn build_top_level_matcher(
     if !top_level_matcher.has_side_effects() {
         let mut new_and_matcher = AndMatcherBuilder::new();
         new_and_matcher.new_and_condition(top_level_matcher);
-        new_and_matcher.new_and_condition(Printer::new(PrintDelimiter::Newline, None));
+        new_and_matcher.new_and_condition(
+            Printer::new(PrintDelimiter::Newline, None)
+                .with_stdout_errors(config.stdout_errors.clone()),
+        );
         return Ok(new_and_matcher.build());
     }
     Ok(top_level_matcher)
@@ -414,45 +416,18 @@ fn convert_arg_to_comparable_value_and_suffix(
     )))
 }
 
-/// This is a function that converts a specific string format into a timestamp.
-/// It allows converting a time string of
-/// "(week abbreviation) (date), (year) (time)" to a Unix timestamp.
-/// such as: "jan 01, 2025 00:00:01" -> 1735689601000
-/// When (time) is not provided, it will be automatically filled in as 00:00:00
-/// such as: "jan 01, 2025" = "jan 01, 2025 00:00:00" -> 1735689600000
+/// Parses a `-newerXt` date in `date -d` syntax, in local time, to Unix milliseconds.
 fn parse_date_str_to_timestamps(date_str: &str) -> Option<i64> {
-    if let Ok(datetime) = NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S") {
-        return Some(datetime.and_utc().timestamp_millis());
-    }
-    if let Ok(date) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-        return Some(date.and_hms_opt(0, 0, 0)?.and_utc().timestamp_millis());
-    }
-
-    let regex_pattern =
-        r"^(?P<month_day>\w{3} \d{2})?(?:, (?P<year>\d{4}))?(?: (?P<time>\d{2}:\d{2}:\d{2}))?$";
-    let re = Regex::new(regex_pattern);
-
-    if let Some(captures) = re.ok()?.captures(date_str) {
-        let now = Utc::now();
-        let month_day = captures
-            .get(1)
-            .map_or(format!("{} {}", now.format("%b"), now.format("%d")), |m| {
-                m.as_str().to_string()
-            });
-        // If no year input.
-        let year = match captures.get(2) {
-            Some(m) => m.as_str().parse().ok()?,
-            None => now.year(),
-        };
-        // If the user does not enter a specific time, it will be filled with 0
-        let time_str = captures.get(3).map_or("00:00:00", |m| m.as_str());
-        let date_time_str = format!("{month_day}, {year} {time_str}");
-        let datetime = NaiveDateTime::parse_from_str(&date_time_str, "%b %d, %Y %H:%M:%S").ok()?;
-        let utc_datetime = DateTime::<Utc>::from_naive_utc_and_offset(datetime, Utc);
-        Some(utc_datetime.timestamp_millis())
+    // An empty string is the start of today, like GNU find.
+    let date_str = if date_str.is_empty() {
+        "00:00"
     } else {
-        None
-    }
+        date_str
+    };
+    let zoned = parse_datetime::parse_datetime(date_str)
+        .ok()?
+        .into_zoned()?;
+    Some(zoned.timestamp().as_millisecond())
 }
 
 /// This function implements the function of matching substrings of
@@ -720,8 +695,16 @@ fn build_matcher_tree(
     let mut invert_next_matcher = false;
     while i < args.len() {
         let possible_submatcher = match lookup_predicate(args[i]) {
-            Predicate::Print => Some(Printer::new(PrintDelimiter::Newline, None).into_box()),
-            Predicate::Print0 => Some(Printer::new(PrintDelimiter::Null, None).into_box()),
+            Predicate::Print => Some(
+                Printer::new(PrintDelimiter::Newline, None)
+                    .with_stdout_errors(config.stdout_errors.clone())
+                    .into_box(),
+            ),
+            Predicate::Print0 => Some(
+                Printer::new(PrintDelimiter::Null, None)
+                    .with_stdout_errors(config.stdout_errors.clone())
+                    .into_box(),
+            ),
             Predicate::Printf => {
                 if i >= args.len() - 1 {
                     return Err(missing_argument_error(args, i).into());
@@ -2087,37 +2070,70 @@ mod tests {
 
     #[test]
     fn parse_date_str_to_timestamps_test() {
-        let full_date_timestamps = parse_date_str_to_timestamps("jan 01, 2025 00:00:01").unwrap();
-        assert!(full_date_timestamps.to_string().contains("1735689601000"));
+        use chrono::{Local, TimeZone};
+        // Dates without a zone are local time, as in GNU find.
+        let local = |y, m, d, h, min, sec| {
+            Local
+                .with_ymd_and_hms(y, m, d, h, min, sec)
+                .unwrap()
+                .timestamp_millis()
+        };
 
-        let not_include_time_date_timestamps =
-            parse_date_str_to_timestamps("jan 01, 2025").unwrap();
-        assert!(not_include_time_date_timestamps
-            .to_string()
-            .contains("1735689600000"));
+        assert_eq!(
+            parse_date_str_to_timestamps("jan 01, 2025 00:00:01"),
+            Some(local(2025, 1, 1, 0, 0, 1))
+        );
+        assert_eq!(
+            parse_date_str_to_timestamps("jan 01, 2025"),
+            Some(local(2025, 1, 1, 0, 0, 0))
+        );
 
-        // pass if return current time.
-        let none_date_timestamps = parse_date_str_to_timestamps("");
-        let now_but_zero_hour_min_sec = Utc::now()
-            .date_naive()
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp_millis();
-        assert_eq!(none_date_timestamps, Some(now_but_zero_hour_min_sec));
+        // An empty string is the start of today.
+        let today = Local::now().date_naive();
+        assert_eq!(
+            parse_date_str_to_timestamps(""),
+            Some(
+                today
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_local_timezone(Local)
+                    .unwrap()
+                    .timestamp_millis()
+            )
+        );
 
         // A year of non-ASCII decimal digits must be rejected, not panic.
         assert_eq!(parse_date_str_to_timestamps("jan 01, ٠٠٠٠"), None);
+        assert_eq!(parse_date_str_to_timestamps("not a date"), None);
 
         // ISO 8601 date and date-time, as accepted by GNU find.
         assert_eq!(
             parse_date_str_to_timestamps("2025-01-01"),
-            Some(1_735_689_600_000)
+            Some(local(2025, 1, 1, 0, 0, 0))
         );
         assert_eq!(
             parse_date_str_to_timestamps("2025-01-01 00:00:01"),
-            Some(1_735_689_601_000)
+            Some(local(2025, 1, 1, 0, 0, 1))
         );
+        assert_eq!(
+            parse_date_str_to_timestamps("2025-01-01T00:00"),
+            Some(local(2025, 1, 1, 0, 0, 0))
+        );
+
+        // Other `date -d` forms.
+        assert_eq!(
+            parse_date_str_to_timestamps("@1735689600"),
+            Some(1_735_689_600_000)
+        );
+        assert_eq!(
+            parse_date_str_to_timestamps("2025-01-01 10:00 +0000"),
+            Some(1_735_725_600_000)
+        );
+        assert_eq!(
+            parse_date_str_to_timestamps("1 Jan 2025"),
+            Some(local(2025, 1, 1, 0, 0, 0))
+        );
+        assert!(parse_date_str_to_timestamps("yesterday").is_some());
     }
 
     #[test]

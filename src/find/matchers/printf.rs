@@ -42,7 +42,7 @@ impl TimeFormat {
                 format!("{}.{:09}0", duration.as_secs(), duration.subsec_nanos())
             }
             Self::Ctime => {
-                const CTIME_FORMAT: &str = "%a %b %d %H:%M:%S.%f0 %Y";
+                const CTIME_FORMAT: &str = "%a %b %e %H:%M:%S.%f0 %Y";
 
                 DateTime::<Local>::from(time)
                     .format(CTIME_FORMAT)
@@ -120,6 +120,7 @@ enum FormatDirective {
 #[derive(Debug, PartialEq, Eq)]
 enum FormatComponent {
     Literal(String),
+    Byte(u8),
     Flush,
     Directive {
         directive: FormatDirective,
@@ -188,10 +189,8 @@ impl FormatStringParser<'_> {
                 .collect();
             let code = u32::from_str_radix(&octal, OCTAL_RADIX)?;
             self.advance_by(octal.len())?;
-            return match char::from_u32(code) {
-                Some(c) => Ok(FormatComponent::Literal(c.to_string())),
-                None => Err(format!("Invalid character value: \\{octal}").into()),
-            };
+            // GNU octal escapes emit one byte, truncating values above 0xff.
+            return Ok(FormatComponent::Byte(code as u8));
         }
 
         self.advance_one()?;
@@ -534,7 +533,7 @@ fn format_directive<'entry>(
         FormatDirective::Permissions(PermissionsFormat::Octal) => "777".into(),
         #[cfg(unix)]
         FormatDirective::Permissions(PermissionsFormat::Octal) => {
-            format!("{:>03o}", meta()?.mode() & 0o777).into()
+            format!("{:o}", meta()?.mode() & 0o7777).into()
         }
 
         FormatDirective::Size => meta()?.len()?.to_string().into(),
@@ -632,7 +631,12 @@ impl Printf {
         for component in &self.format.components {
             match component {
                 FormatComponent::Literal(literal) => write!(out, "{literal}")?,
-                FormatComponent::Flush => out.flush()?,
+                FormatComponent::Byte(byte) => out.write_all(&[*byte])?,
+                // \c stops the rest of this format, as in GNU find
+                FormatComponent::Flush => {
+                    out.flush()?;
+                    break;
+                }
                 FormatComponent::Directive {
                     directive,
                     width,
@@ -758,7 +762,7 @@ mod tests {
     fn print_propagates_output_errors() -> Result<(), Box<dyn Error>> {
         let abbbc = get_dir_entry_for("./test_data/simple", "abbbc");
 
-        for format in ["literal", "%p", "\\c"] {
+        for format in ["literal", "%p", "\\c", "\\377"] {
             let printf = Printf::new(format, None)?;
             assert_eq!(
                 printf
@@ -809,11 +813,11 @@ mod tests {
                 .components,
             vec![
                 FormatComponent::Literal("abc".to_owned()),
-                FormatComponent::Literal("\0".to_owned()),
+                FormatComponent::Byte(0),
                 FormatComponent::Literal("\t".to_owned()),
                 FormatComponent::Literal("\n".to_owned()),
                 FormatComponent::Literal("\\".to_owned()),
-                FormatComponent::Literal("a".to_owned()),
+                FormatComponent::Byte(b'a'),
                 FormatComponent::Literal("de".to_owned()),
                 FormatComponent::Flush,
                 FormatComponent::Literal("f".to_owned())
@@ -844,21 +848,21 @@ mod tests {
         assert_eq!(
             FormatString::parse("\\0€").unwrap().components,
             vec![
-                FormatComponent::Literal("\0".to_owned()),
+                FormatComponent::Byte(0),
                 FormatComponent::Literal("€".to_owned()),
             ]
         );
         assert_eq!(
             FormatString::parse("\\1😀").unwrap().components,
             vec![
-                FormatComponent::Literal("\u{1}".to_owned()),
+                FormatComponent::Byte(1),
                 FormatComponent::Literal("😀".to_owned()),
             ]
         );
         assert_eq!(
             FormatString::parse("\\00é").unwrap().components,
             vec![
-                FormatComponent::Literal("\0".to_owned()),
+                FormatComponent::Byte(0),
                 FormatComponent::Literal("é".to_owned()),
             ]
         );
@@ -1007,6 +1011,16 @@ mod tests {
         let matcher = Printf::new("%f,%7f,%-7f", None).unwrap();
         assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
         assert_eq!("abbbc,  abbbc,abbbc  ", deps.get_output_as_string());
+    }
+
+    #[test]
+    fn test_printf_backslash_c_stops_the_format() {
+        let file_info = get_dir_entry_for("test_data/simple", "abbbc");
+        let deps = FakeDependencies::new();
+
+        let matcher = Printf::new("%f\\c%s\n", None).unwrap();
+        assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
+        assert_eq!("abbbc", deps.get_output_as_string());
     }
 
     #[test]
@@ -1245,6 +1259,35 @@ mod tests {
     }
 
     #[test]
+    fn test_printf_ctime_pads_day_with_space() {
+        let temp_dir = Builder::new().prefix("example").tempdir().unwrap();
+        let temp_dir_path = temp_dir.path().to_string_lossy();
+        let new_file_name = "newFile";
+        let file_path = temp_dir.path().join(new_file_name);
+        File::create(&file_path).expect("create temp file");
+
+        let mtime = chrono::Local
+            .with_ymd_and_hms(2000, 1, 2, 9, 30, 21)
+            .unwrap();
+        filetime::set_file_mtime(
+            &file_path,
+            filetime::FileTime::from_unix_time(mtime.timestamp(), 0),
+        )
+        .expect("set temp file mtime");
+
+        let file_info = get_dir_entry_for(&temp_dir_path, new_file_name);
+        let deps = FakeDependencies::new();
+
+        // like ctime(3): "Jan  2", not "Jan 02"
+        let matcher = Printf::new("%t", None).unwrap();
+        assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
+        assert_eq!(
+            "Sun Jan  2 09:30:21.0000000000 2000",
+            deps.get_output_as_string()
+        );
+    }
+
+    #[test]
     fn test_printf_time_plus_format() {
         let temp_dir = Builder::new().prefix("example").tempdir().unwrap();
         let temp_dir_path = temp_dir.path().to_string_lossy();
@@ -1312,18 +1355,24 @@ mod tests {
 
         let temp_dir = Builder::new().prefix("example").tempdir().unwrap();
         let temp_dir_path = temp_dir.path().to_string_lossy();
-        let new_file_name = "newFile";
-        let file = File::create(temp_dir.path().join(new_file_name)).expect("create temp file");
 
-        let mut perms = file.metadata().unwrap().permissions();
-        perms.set_mode(0o755);
-        file.set_permissions(perms).unwrap();
+        for (mode, expected) in [
+            (0o755, "755 -rwxr-xr-x"),
+            (0o4755, "4755 -rwsr-xr-x"),
+            (0o044, "44 ----r--r--"),
+        ] {
+            let new_file_name = format!("file{mode:o}");
+            let file = File::create(temp_dir.path().join(&new_file_name)).unwrap();
+            let mut perms = file.metadata().unwrap().permissions();
+            perms.set_mode(mode);
+            file.set_permissions(perms).unwrap();
 
-        let file_info = get_dir_entry_for(&temp_dir_path, new_file_name);
-        let deps = FakeDependencies::new();
+            let file_info = get_dir_entry_for(&temp_dir_path, &new_file_name);
+            let deps = FakeDependencies::new();
 
-        let matcher = Printf::new("%m %M", None).unwrap();
-        assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
-        assert_eq!("755 -rwxr-xr-x", deps.get_output_as_string());
+            let matcher = Printf::new("%m %M", None).unwrap();
+            assert!(matcher.matches(&file_info, &mut deps.new_matcher_io()));
+            assert_eq!(expected, deps.get_output_as_string());
+        }
     }
 }
