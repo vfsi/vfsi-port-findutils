@@ -108,7 +108,7 @@ fn visit_backend<C: Vfsi>(
                     .entry
                     .path()
                     .strip_prefix(vroot)
-                    .map_err(|_| vnfs::Error::client(0, 22))?;
+                    .map_err(|_| vnfs::Error::errno(0, 22))?;
                 let path = if relative.as_os_str().is_empty() {
                     typed.to_path_buf()
                 } else {
