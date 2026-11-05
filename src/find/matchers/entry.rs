@@ -7,7 +7,7 @@ use std::fmt::{self, Display, Formatter};
 use std::fs::{self, Metadata};
 use std::io::{self, ErrorKind};
 #[cfg(unix)]
-use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -168,134 +168,159 @@ impl Meta {
     }
 
     #[cfg(unix)]
-    pub fn mode(&self) -> u32 {
+    pub fn mode(&self) -> io::Result<u32> {
         match self {
-            Self::Std(m) => m.mode(),
+            Self::Std(m) => Ok(m.mode()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(v) => v.mode().unwrap_or_default(),
+            Self::Vfs(v) => v
+                .mode()
+                .ok_or_else(|| io::Error::new(ErrorKind::Unsupported, "mode was not supplied")),
         }
     }
 
     #[cfg(unix)]
-    pub fn uid(&self) -> u32 {
+    pub fn uid(&self) -> io::Result<u32> {
         match self {
-            Self::Std(m) => m.uid(),
+            Self::Std(m) => Ok(m.uid()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(v) => v.uid().unwrap_or_default(),
+            Self::Vfs(v) => v
+                .uid()
+                .ok_or_else(|| io::Error::new(ErrorKind::Unsupported, "uid was not supplied")),
         }
     }
 
     #[cfg(unix)]
-    pub fn gid(&self) -> u32 {
+    pub fn gid(&self) -> io::Result<u32> {
         match self {
-            Self::Std(m) => m.gid(),
+            Self::Std(m) => Ok(m.gid()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(v) => v.gid().unwrap_or_default(),
+            Self::Vfs(v) => v
+                .gid()
+                .ok_or_else(|| io::Error::new(ErrorKind::Unsupported, "gid was not supplied")),
         }
     }
 
     #[cfg(unix)]
-    pub fn nlink(&self) -> u64 {
+    pub fn nlink(&self) -> io::Result<u64> {
         match self {
-            Self::Std(m) => m.nlink(),
+            Self::Std(m) => Ok(m.nlink()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(v) => u64::from(v.nlink().unwrap_or_default()),
+            Self::Vfs(v) => v
+                .nlink()
+                .map(u64::from)
+                .ok_or_else(|| io::Error::new(ErrorKind::Unsupported, "nlink was not supplied")),
         }
     }
 
     #[cfg(unix)]
-    pub fn ino(&self) -> u64 {
+    pub fn ino(&self) -> io::Result<u64> {
         match self {
-            Self::Std(m) => m.ino(),
+            Self::Std(m) => Ok(m.ino()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(v) => v.file_id().unwrap_or_default(),
+            Self::Vfs(v) => v
+                .file_id()
+                .ok_or_else(|| io::Error::new(ErrorKind::Unsupported, "file_id was not supplied")),
         }
     }
 
     #[cfg(unix)]
-    pub fn dev(&self) -> u64 {
+    pub fn blocks(&self) -> io::Result<u64> {
         match self {
-            Self::Std(m) => m.dev(),
-            // A single NFS export is one device.
+            Self::Std(m) => Ok(m.blocks()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(_) => 0,
+            Self::Vfs(v) => v
+                .blocks()
+                .ok_or_else(|| io::Error::new(ErrorKind::Unsupported, "blocks was not supplied")),
         }
     }
 
     #[cfg(unix)]
-    pub fn blocks(&self) -> u64 {
+    pub fn dev(&self) -> io::Result<u64> {
         match self {
-            Self::Std(m) => m.blocks(),
+            Self::Std(m) => Ok(m.dev()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(v) => v.blocks().unwrap_or_default(),
+            Self::Vfs(_) => Err(io::Error::new(
+                ErrorKind::Unsupported,
+                "kernel device identity requires native metadata",
+            )),
         }
     }
 
     #[cfg(unix)]
-    pub fn atime(&self) -> i64 {
+    pub fn atime(&self) -> io::Result<i64> {
         match self {
-            Self::Std(m) => m.atime(),
-            #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(v) => v.accessed().map_or(0, |t| system_time_parts(t).0),
-        }
-    }
-
-    #[cfg(unix)]
-    pub fn atime_nsec(&self) -> i64 {
-        match self {
-            Self::Std(m) => m.atime_nsec(),
+            Self::Std(m) => Ok(m.atime()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
             Self::Vfs(v) => v
                 .accessed()
-                .map_or(0, |t| i64::from(system_time_parts(t).1)),
+                .map(|t| system_time_parts(t).0)
+                .ok_or_else(|| io::Error::new(ErrorKind::Unsupported, "accessed was not supplied")),
         }
     }
 
     #[cfg(unix)]
-    pub fn mtime(&self) -> i64 {
+    pub fn atime_nsec(&self) -> io::Result<i64> {
         match self {
-            Self::Std(m) => m.mtime(),
+            Self::Std(m) => Ok(m.atime_nsec()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(v) => v.modified().map_or(0, |t| system_time_parts(t).0),
+            Self::Vfs(v) => v
+                .accessed()
+                .map(|t| i64::from(system_time_parts(t).1))
+                .ok_or_else(|| io::Error::new(ErrorKind::Unsupported, "accessed was not supplied")),
         }
     }
 
     #[cfg(unix)]
-    pub fn mtime_nsec(&self) -> i64 {
+    pub fn mtime(&self) -> io::Result<i64> {
         match self {
-            Self::Std(m) => m.mtime_nsec(),
+            Self::Std(m) => Ok(m.mtime()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
             Self::Vfs(v) => v
                 .modified()
-                .map_or(0, |t| i64::from(system_time_parts(t).1)),
+                .map(|t| system_time_parts(t).0)
+                .ok_or_else(|| io::Error::new(ErrorKind::Unsupported, "modified was not supplied")),
         }
     }
 
     #[cfg(unix)]
-    pub fn ctime(&self) -> i64 {
+    pub fn mtime_nsec(&self) -> io::Result<i64> {
         match self {
-            Self::Std(m) => m.ctime(),
+            Self::Std(m) => Ok(m.mtime_nsec()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(v) => v.changed().map_or(0, |t| system_time_parts(t).0),
+            Self::Vfs(v) => v
+                .modified()
+                .map(|t| i64::from(system_time_parts(t).1))
+                .ok_or_else(|| io::Error::new(ErrorKind::Unsupported, "modified was not supplied")),
         }
     }
 
     #[cfg(unix)]
-    pub fn ctime_nsec(&self) -> i64 {
+    pub fn ctime(&self) -> io::Result<i64> {
         match self {
-            Self::Std(m) => m.ctime_nsec(),
+            Self::Std(m) => Ok(m.ctime()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(v) => v.changed().map_or(0, |t| i64::from(system_time_parts(t).1)),
+            Self::Vfs(v) => v
+                .changed()
+                .map(|t| system_time_parts(t).0)
+                .ok_or_else(|| io::Error::new(ErrorKind::Unsupported, "changed was not supplied")),
         }
     }
 
     #[cfg(unix)]
-    pub fn permissions(&self) -> Perms {
+    pub fn ctime_nsec(&self) -> io::Result<i64> {
         match self {
-            Self::Std(m) => Perms(m.permissions().mode() & 0o7777),
+            Self::Std(m) => Ok(m.ctime_nsec()),
             #[cfg(all(target_os = "linux", feature = "vnfs"))]
-            Self::Vfs(v) => Perms(v.mode().unwrap_or_default() & 0o7777),
+            Self::Vfs(v) => v
+                .changed()
+                .map(|t| i64::from(system_time_parts(t).1))
+                .ok_or_else(|| io::Error::new(ErrorKind::Unsupported, "changed was not supplied")),
         }
+    }
+
+    #[cfg(unix)]
+    pub fn permissions(&self) -> io::Result<Perms> {
+        Ok(Perms(self.mode()? & 0o7777))
     }
 
     #[cfg(windows)]
@@ -579,6 +604,14 @@ impl WalkEntry {
         self.follow.follow_at_depth(self.depth())
     }
 
+    #[cfg(unix)]
+    pub fn device(&self) -> Result<u64, WalkError> {
+        if let Ok(device) = self.metadata()?.dev() {
+            return Ok(device);
+        }
+        self.get_metadata()?.dev().map_err(WalkError::from)
+    }
+
     /// Get the metadata on a cache miss.
     fn get_metadata(&self) -> Result<Meta, WalkError> {
         self.follow.metadata_at_depth(self.path(), self.depth())
@@ -625,6 +658,55 @@ mod vfsi_metadata_tests {
     use vnfs::directory::{Attributes, AttrsOptions};
     use vnfs::files::VfsiExt;
     use vnfs::posix::Posix;
+
+    #[test]
+    fn absent_integer_fields_and_device_identity_are_not_zero() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("file");
+        std::fs::write(&path, b"").unwrap();
+        let fs = Posix::new(root.path()).unwrap();
+        let attrs = fs
+            .attrs_with_options("/file", AttrsOptions::new().with_fields(Attributes::MODE))
+            .unwrap();
+        let entry = WalkEntry::from_vfs(&path, 0, Follow::Never, attrs);
+        let metadata = entry.metadata().unwrap();
+        for missing in [
+            metadata.uid().map(u64::from),
+            metadata.gid().map(u64::from),
+            metadata.ino(),
+            metadata.nlink(),
+            metadata.blocks(),
+            metadata.dev(),
+        ] {
+            assert_eq!(missing.unwrap_err().kind(), ErrorKind::Unsupported);
+        }
+        assert_eq!(metadata.ctime().unwrap_err().kind(), ErrorKind::Unsupported);
+        assert_eq!(
+            entry.device().unwrap(),
+            std::fs::symlink_metadata(&path).unwrap().dev()
+        );
+    }
+
+    #[test]
+    fn omitted_ownership_does_not_match_root_or_zero_ids() {
+        use super::super::{
+            group::GroupMatcher, stat::InodeMatcher, user::UserMatcher, ComparableValue, Matcher,
+        };
+        use crate::find::tests::FakeDependencies;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("file");
+        std::fs::write(&path, b"").unwrap();
+        let fs = Posix::new(root.path()).unwrap();
+        let attrs = fs
+            .attrs_with_options("/file", AttrsOptions::new().with_fields(Attributes::MODE))
+            .unwrap();
+        let entry = WalkEntry::from_vfs(path, 0, Follow::Never, attrs);
+        let deps = FakeDependencies::new();
+        let mut io = deps.new_matcher_io();
+        assert!(!UserMatcher::from_uid(0).matches(&entry, &mut io));
+        assert!(!GroupMatcher::from_gid(0).matches(&entry, &mut io));
+        assert!(!InodeMatcher::new(ComparableValue::EqualTo(0)).matches(&entry, &mut io));
+    }
 
     #[test]
     fn direct_size_matchers_reject_missing_size_and_accept_empty_files() {

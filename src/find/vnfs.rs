@@ -5,7 +5,7 @@ use super::{Config, Follow};
 use std::path::{Path, PathBuf};
 use vnfs::directory::{Attributes, DepthLimit, WalkControl, WalkEventKind, WalkOptions};
 use vnfs::files::{Vfsi, VfsiExt};
-use vnfs::nfs::Nfs;
+use vnfs::nfs::mount::NfsMountSession;
 use vnfs::posix::Posix;
 
 pub fn is_enabled() -> bool {
@@ -33,7 +33,7 @@ pub fn visit(
             callback,
         )),
         Ok("nfs") => Some(visit_backend(
-            &Nfs::from_mount(&base).ok()?,
+            NfsMountSession::from_mount(&base).ok()?.fs(),
             typed,
             &vroot,
             config,
@@ -126,7 +126,11 @@ fn visit_backend<C: Vfsi>(
                 })
             },
         )
-        .map(|_| ())
+        .map(|_| {
+            if std::env::var("VNFS_PROFILE").as_deref() == Ok("1") {
+                eprintln!("[profile] find_walk_completed");
+            }
+        })
 }
 
 #[cfg(test)]

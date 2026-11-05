@@ -553,7 +553,7 @@ fn format_directive<'entry>(
 
         FormatDirective::Blocks { large_blocks } => {
             #[cfg(unix)]
-            let len = meta()?.blocks() * STANDARD_BLOCK_SIZE;
+            let len = meta()?.blocks()? * STANDARD_BLOCK_SIZE;
             #[cfg(not(unix))]
             let len = meta()?.len()?;
 
@@ -575,8 +575,8 @@ fn format_directive<'entry>(
 
             let meta = meta()?;
             let ctime = SystemTime::UNIX_EPOCH
-                + Duration::from_secs(meta.ctime() as u64)
-                + Duration::from_nanos(meta.ctime_nsec() as u64);
+                + Duration::from_secs(meta.ctime()? as u64)
+                + Duration::from_nanos(meta.ctime_nsec()? as u64);
             tf.apply(ctime)?
         }
 
@@ -585,7 +585,7 @@ fn format_directive<'entry>(
         #[cfg(not(unix))]
         FormatDirective::Device => "0".into(),
         #[cfg(unix)]
-        FormatDirective::Device => meta()?.dev().to_string().into(),
+        FormatDirective::Device => file_info.device()?.to_string().into(),
 
         // GNU find's behavior for this is a bit...odd:
         // - Both the root directory and the paths immediately underneath return an empty string
@@ -599,7 +599,7 @@ fn format_directive<'entry>(
         FormatDirective::Filesystem => "".into(),
         #[cfg(unix)]
         FormatDirective::Filesystem => {
-            let dev_id = meta()?.dev().to_string();
+            let dev_id = file_info.device()?.to_string();
             let fs_list =
                 uucore::fsext::read_fs_list().expect("Could not find the filesystem info");
             fs_list
@@ -613,7 +613,7 @@ fn format_directive<'entry>(
         FormatDirective::Group { .. } => "0".into(),
         #[cfg(unix)]
         FormatDirective::Group { as_name } => {
-            let gid = meta()?.gid();
+            let gid = meta()?.gid()?;
             if *as_name {
                 uucore::entries::gid2grp(gid).unwrap_or_else(|_| gid.to_string())
             } else {
@@ -625,12 +625,12 @@ fn format_directive<'entry>(
         #[cfg(not(unix))]
         FormatDirective::HardlinkCount => "0".into(),
         #[cfg(unix)]
-        FormatDirective::HardlinkCount => meta()?.nlink().to_string().into(),
+        FormatDirective::HardlinkCount => meta()?.nlink()?.to_string().into(),
 
         #[cfg(not(unix))]
         FormatDirective::Inode => "0".into(),
         #[cfg(unix)]
-        FormatDirective::Inode => meta()?.ino().to_string().into(),
+        FormatDirective::Inode => meta()?.ino()?.to_string().into(),
 
         FormatDirective::ModificationTime(tf) => tf.apply(meta()?.modified()?)?,
 
@@ -652,7 +652,7 @@ fn format_directive<'entry>(
 
         #[cfg(unix)]
         FormatDirective::Permissions(PermissionsFormat::Symbolic) => {
-            uucore::fs::display_permissions_unix(meta()?.mode(), true).into()
+            uucore::fs::display_permissions_unix(meta()?.mode()?, true).into()
         }
         #[cfg(not(unix))]
         FormatDirective::Permissions(PermissionsFormat::Symbolic) => match meta()? {
@@ -662,7 +662,7 @@ fn format_directive<'entry>(
         FormatDirective::Permissions(PermissionsFormat::Octal) => "777".into(),
         #[cfg(unix)]
         FormatDirective::Permissions(PermissionsFormat::Octal) => {
-            format!("{:o}", meta()?.mode() & 0o7777).into()
+            format!("{:o}", meta()?.mode()? & 0o7777).into()
         }
 
         FormatDirective::Size => meta()?.len()?.to_string().into(),
@@ -679,7 +679,7 @@ fn format_directive<'entry>(
                     "{:.1}",
                     // GNU find hardcodes a block size of 512 bytes, regardless
                     // of the true filesystem block size.
-                    (meta.blocks() * STANDARD_BLOCK_SIZE) as f64 / (size as f64)
+                    (meta.blocks()? * STANDARD_BLOCK_SIZE) as f64 / (size as f64)
                 )
                 .into()
             } else {
@@ -721,7 +721,7 @@ fn format_directive<'entry>(
         FormatDirective::User { .. } => "0".into(),
         #[cfg(unix)]
         FormatDirective::User { as_name } => {
-            let uid = meta()?.uid();
+            let uid = meta()?.uid()?;
             if *as_name {
                 uucore::entries::uid2usr(uid).unwrap_or_else(|_| uid.to_string())
             } else {

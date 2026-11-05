@@ -19,8 +19,11 @@ impl InodeMatcher {
 
 impl Matcher for InodeMatcher {
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
-        match file_info.metadata() {
-            Ok(metadata) => self.ino.matches(metadata.ino()),
+        match file_info
+            .metadata()
+            .and_then(|m| m.ino().map_err(super::entry::WalkError::from))
+        {
+            Ok(value) => self.ino.matches(value),
             Err(_) => false,
         }
     }
@@ -39,8 +42,11 @@ impl LinksMatcher {
 
 impl Matcher for LinksMatcher {
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
-        match file_info.metadata() {
-            Ok(metadata) => self.nlink.matches(metadata.nlink()),
+        match file_info
+            .metadata()
+            .and_then(|m| m.nlink().map_err(super::entry::WalkError::from))
+        {
+            Ok(value) => self.nlink.matches(value),
             Err(_) => false,
         }
     }
@@ -60,19 +66,19 @@ mod tests {
         let metadata = file_info.metadata().unwrap();
         let deps = FakeDependencies::new();
 
-        let matcher = InodeMatcher::new(ComparableValue::EqualTo(metadata.ino()));
+        let matcher = InodeMatcher::new(ComparableValue::EqualTo(metadata.ino().unwrap()));
         assert!(
             matcher.matches(&file_info, &mut deps.new_matcher_io()),
             "inode number should match"
         );
 
-        let matcher = InodeMatcher::new(ComparableValue::LessThan(metadata.ino()));
+        let matcher = InodeMatcher::new(ComparableValue::LessThan(metadata.ino().unwrap()));
         assert!(
             !matcher.matches(&file_info, &mut deps.new_matcher_io()),
             "inode number should not match"
         );
 
-        let matcher = InodeMatcher::new(ComparableValue::MoreThan(metadata.ino()));
+        let matcher = InodeMatcher::new(ComparableValue::MoreThan(metadata.ino().unwrap()));
         assert!(
             !matcher.matches(&file_info, &mut deps.new_matcher_io()),
             "inode number should not match"

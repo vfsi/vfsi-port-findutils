@@ -17,3 +17,5 @@ jobs:
         run: cargo test --locked --features vnfs --lib
       - name: Build application
         run: cargo build --locked --features vnfs
+      - name: Verify VFSI CLI parity and activation
+        run: python3 tests/vfsi_port.py

@@ -107,7 +107,7 @@ impl Matcher for FileSystemMatcher {
         // Reuse the metadata already cached on the entry (a single shared `statx` per entry)
         // rather than issuing a fresh `lstat`/`statx` here. With several `-fstype` clauses (as
         // `updatedb` builds) this turns N stats per file into one.
-        let Ok(metadata) = file_info.metadata() else {
+        let Ok(_) = file_info.metadata() else {
             writeln!(
                 &mut stderr(),
                 "Error getting filesystem type for {}",
@@ -117,7 +117,10 @@ impl Matcher for FileSystemMatcher {
 
             return false;
         };
-        let dev_id = metadata.dev().to_string();
+        let dev_id = match file_info.device() {
+            Ok(device) => device.to_string(),
+            Err(_) => return false,
+        };
 
         if let Ok(result) = fs_type_for_dev(dev_id, &self.cache) {
             result == self.fs_text

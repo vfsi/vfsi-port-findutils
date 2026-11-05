@@ -251,8 +251,8 @@ impl ChangeTime for Metadata {
 #[cfg(unix)]
 impl ChangeTime for Meta {
     fn changed(&self) -> std::io::Result<SystemTime> {
-        let ctime_sec = self.ctime();
-        let ctime_nsec = self.ctime_nsec() as u32;
+        let ctime_sec = self.ctime()?;
+        let ctime_nsec = self.ctime_nsec()? as u32;
         let ctime = if ctime_sec >= 0 {
             UNIX_EPOCH + std::time::Duration::new(ctime_sec as u64, ctime_nsec)
         } else {

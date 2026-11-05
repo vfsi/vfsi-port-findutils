@@ -66,7 +66,27 @@ impl Ls {
     ) {
         let metadata = file_info.metadata().unwrap();
 
-        let inode_number = metadata.ino();
+        let (inode_number, nlink, uid, gid, mode, blocks) = match (|| -> std::io::Result<_> {
+            Ok((
+                metadata.ino()?,
+                metadata.nlink()?,
+                metadata.uid()?,
+                metadata.gid()?,
+                metadata.mode()?,
+                metadata.blocks()?,
+            ))
+        })() {
+            Ok(values) => values,
+            Err(error) => {
+                let _ = writeln!(
+                    &mut stderr(),
+                    "Error getting metadata for {}: {error}",
+                    file_info.path().display()
+                );
+                matcher_io.set_exit_code(1);
+                return;
+            }
+        };
         let size = match metadata.size() {
             Ok(size) => size,
             Err(error) => {
@@ -80,16 +100,14 @@ impl Ls {
             }
         };
         // st_blocks counts 512-byte units; -ls shows 1 KiB ones
-        let number_of_blocks = metadata.blocks().div_ceil(2);
-        let permission = uucore::fs::display_permissions_unix(metadata.mode(), true);
-        let hard_links = metadata.nlink();
+        let number_of_blocks = blocks.div_ceil(2);
+        let permission = uucore::fs::display_permissions_unix(mode, true);
+        let hard_links = nlink;
         // Fall back to the numeric id when the uid/gid has no passwd/group entry
         // (unmapped owner) — matching GNU find, which never crashes. uucore::entries
         // serializes the non-thread-safe getpwuid/getgrgid behind a mutex.
-        let user =
-            uucore::entries::uid2usr(metadata.uid()).unwrap_or_else(|_| metadata.uid().to_string());
-        let group =
-            uucore::entries::gid2grp(metadata.gid()).unwrap_or_else(|_| metadata.gid().to_string());
+        let user = uucore::entries::uid2usr(uid).unwrap_or_else(|_| uid.to_string());
+        let group = uucore::entries::gid2grp(gid).unwrap_or_else(|_| gid.to_string());
         let last_modified = {
             let system_time = metadata.modified().unwrap();
             let local: DateTime<chrono::Local> = system_time.into();

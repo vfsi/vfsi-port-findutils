@@ -40,8 +40,11 @@ impl GroupMatcher {
 impl Matcher for GroupMatcher {
     #[cfg(unix)]
     fn matches(&self, file_info: &WalkEntry, _: &mut MatcherIO) -> bool {
-        match file_info.metadata() {
-            Ok(metadata) => self.gid.matches(metadata.gid().into()),
+        match file_info
+            .metadata()
+            .and_then(|m| m.gid().map_err(super::entry::WalkError::from))
+        {
+            Ok(value) => self.gid.matches(value.into()),
             Err(_) => false,
         }
     }
@@ -69,7 +72,10 @@ impl Matcher for NoGroupMatcher {
             return true;
         };
 
-        let Ok(gid) = Group::from_gid(Gid::from_raw(metadata.gid())) else {
+        let Ok(value) = metadata.gid() else {
+            return false;
+        };
+        let Ok(gid) = Group::from_gid(Gid::from_raw(value)) else {
             return true;
         };
 
@@ -105,7 +111,7 @@ mod tests {
         let foo_path = temp_dir.path().join("foo");
         let _ = File::create(foo_path).expect("create temp file");
         let file_info = get_dir_entry_for(&temp_dir.path().to_string_lossy(), "foo");
-        let file_gid = file_info.metadata().unwrap().gid();
+        let file_gid = file_info.metadata().unwrap().gid().unwrap();
         let file_group = Group::from_gid(Gid::from_raw(file_gid))
             .unwrap()
             .unwrap()

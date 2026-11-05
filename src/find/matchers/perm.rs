@@ -113,8 +113,19 @@ impl Matcher for PermMatcher {
                 } else {
                     self.file_pattern
                 };
-                self.comparison_type
-                    .mode_bits_match(pattern, metadata.permissions().mode())
+                match metadata.permissions() {
+                    Ok(permissions) => self
+                        .comparison_type
+                        .mode_bits_match(pattern, permissions.mode()),
+                    Err(error) => {
+                        let _ = writeln!(
+                            &mut stderr(),
+                            "Error getting permissions for {}: {error}",
+                            file_info.path().display()
+                        );
+                        false
+                    }
+                }
             }
             Err(e) => {
                 writeln!(
