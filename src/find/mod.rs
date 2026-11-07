@@ -375,7 +375,7 @@ fn process_dir(
     ret
 }
 
-/// Drive matchers over entries that were enumerated up front (the VFSI path).
+/// Drive matchers incrementally over the VFSI traversal.
 /// Mirrors the walkdir loop, including `finished_dir` bookkeeping and skipping
 /// the contents of a `-prune`d directory.
 #[cfg(all(target_os = "linux", feature = "vnfs"))]
@@ -388,31 +388,49 @@ fn process_vfsi(
 ) -> Option<i32> {
     let mut ret = 0;
     let mut current_dir: Option<PathBuf> = None;
-    let result = vnfs::visit(dir, config, matcher.metadata_fields(), |entry| {
-        let mut matcher_io = matchers::MatcherIO::new(deps);
+    let mut traversal_errors = false;
+    let result = vnfs::visit(
+        dir,
+        config,
+        matcher.metadata_fields(),
+        |entry| {
+            let mut matcher_io = matchers::MatcherIO::new(deps);
 
-        let new_dir = entry.path().parent().map(std::path::Path::to_path_buf);
-        if new_dir != current_dir {
-            if let Some(dir) = current_dir.take() {
-                matcher.finished_dir(dir.as_path(), &mut matcher_io);
+            let new_dir = entry.path().parent().map(std::path::Path::to_path_buf);
+            if new_dir != current_dir {
+                if let Some(dir) = current_dir.take() {
+                    matcher.finished_dir(dir.as_path(), &mut matcher_io);
+                }
+                current_dir = new_dir;
             }
-            current_dir = new_dir;
-        }
 
-        matcher.matches(&entry, &mut matcher_io);
-        match matcher_io.exit_code() {
-            0 => {}
-            code => ret = code,
-        }
-        if matcher_io.should_quit() {
-            *quit = true;
-            return ::vnfs::directory::WalkControl::Stop;
-        }
-        if matcher_io.should_skip_current_dir() {
-            return ::vnfs::directory::WalkControl::SkipSubtree;
-        }
-        ::vnfs::directory::WalkControl::Continue
-    })?;
+            matcher.matches(&entry, &mut matcher_io);
+            match matcher_io.exit_code() {
+                0 => {}
+                code => ret = code,
+            }
+            if matcher_io.should_quit() {
+                *quit = true;
+                return ::vnfs::directory::WalkControl::Stop;
+            }
+            if matcher_io.should_skip_current_dir() {
+                return ::vnfs::directory::WalkControl::SkipSubtree;
+            }
+            ::vnfs::directory::WalkControl::Continue
+        },
+        |path, _, error| {
+            traversal_errors = true;
+            writeln!(
+                &mut stderr(),
+                "Error processing '{}': {error}",
+                path.display()
+            )
+            .unwrap();
+        },
+    )?;
+    if traversal_errors {
+        ret = 1;
+    }
     if let Err(error) = result {
         ret = 1;
         writeln!(&mut stderr(), "Error: {error}").unwrap();

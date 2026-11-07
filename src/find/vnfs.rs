@@ -2,6 +2,7 @@
 //! once matching has begun, failures never replay side effects via walkdir.
 use super::matchers::WalkEntry;
 use super::{Config, Follow};
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use vnfs::directory::{Attributes, DepthLimit, WalkControl, WalkEventKind, WalkOptions};
 use vnfs::files::{Vfsi, VfsiExt};
@@ -20,6 +21,7 @@ pub fn visit(
     config: &Config,
     fields: Attributes,
     callback: impl FnMut(WalkEntry) -> WalkControl,
+    on_error: impl FnMut(&Path, usize, &vnfs::Error),
 ) -> Option<vnfs::Result<()>> {
     let typed = Path::new(dir);
     let (base, vroot) = mount_operand(typed)?;
@@ -31,6 +33,7 @@ pub fn visit(
             config,
             fields,
             callback,
+            on_error,
         )),
         Ok("nfs") => Some(visit_backend(
             NfsMountSession::from_mount(&base).ok()?.fs(),
@@ -39,6 +42,7 @@ pub fn visit(
             config,
             fields,
             callback,
+            on_error,
         )),
         _ => None,
     }
@@ -69,6 +73,7 @@ fn visit_backend<C: Vfsi>(
     config: &Config,
     fields: Attributes,
     mut callback: impl FnMut(WalkEntry) -> WalkControl,
+    mut on_error: impl FnMut(&Path, usize, &vnfs::Error),
 ) -> vnfs::Result<()> {
     let limits = client.limits();
     let defaults = limits.walk_options();
@@ -82,7 +87,7 @@ fn visit_backend<C: Vfsi>(
         defaults
     };
     client
-        .listdir(
+        .listdir_with_errors(
             vroot,
             WalkOptions::new(options.with_fields(fields).with_recursive(true))
                 .with_enter_leave(true)
@@ -104,16 +109,7 @@ fn visit_backend<C: Vfsi>(
                         WalkControl::Continue
                     });
                 }
-                let relative = event
-                    .entry
-                    .path()
-                    .strip_prefix(vroot)
-                    .map_err(|_| vnfs::Error::errno(0, 22))?;
-                let path = if relative.as_os_str().is_empty() {
-                    typed.to_path_buf()
-                } else {
-                    typed.join(relative)
-                };
+                let path = render_path(typed, vroot, event.entry.path())?;
                 let entry = WalkEntry::from_vfs(
                     path,
                     event.depth,
@@ -125,6 +121,11 @@ fn visit_backend<C: Vfsi>(
                     decision => decision,
                 })
             },
+            |path, depth, error| {
+                let path = render_path(typed, vroot, path)?;
+                on_error(&path, depth, &error);
+                Ok(ControlFlow::Continue(()))
+            },
         )
         .map(|_| {
             if std::env::var("VNFS_PROFILE").as_deref() == Ok("1") {
@@ -133,9 +134,26 @@ fn visit_backend<C: Vfsi>(
         })
 }
 
+fn render_path(typed: &Path, vroot: &Path, path: &Path) -> vnfs::Result<PathBuf> {
+    let relative = path
+        .strip_prefix(vroot)
+        .map_err(|_| vnfs::Error::errno(0, 22))?;
+    Ok(if relative.as_os_str().is_empty() {
+        typed.to_path_buf()
+    } else {
+        typed.join(relative)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn unexpected_error(path: &Path, depth: usize, error: &vnfs::Error) {
+        panic!(
+            "unexpected traversal error at {} depth {depth}: {error}",
+            path.display()
+        );
+    }
     #[test]
     fn directory_operand_discovers_its_mount_but_symlink_stays_on_parent() {
         let root = tempfile::tempdir().unwrap();
@@ -181,6 +199,7 @@ mod tests {
                 out.push((name, entry.depth()));
                 control
             },
+            unexpected_error,
         )
         .unwrap();
         out
@@ -303,6 +322,7 @@ mod tests {
                     depths.push(entry.depth());
                     WalkControl::Continue
                 },
+                unexpected_error,
             );
             if fails {
                 assert_eq!(result.unwrap_err().raw_code(), uucore::libc::EFBIG as u32);
@@ -336,6 +356,7 @@ mod tests {
                 calls += 1;
                 WalkControl::Stop
             },
+            unexpected_error,
         )
         .unwrap();
         assert_eq!(calls, 1);
@@ -350,7 +371,47 @@ mod tests {
                 assert!(entry.file_type().is_symlink());
                 WalkControl::Continue
             },
+            unexpected_error,
         )
         .unwrap();
+    }
+    #[test]
+    fn vanished_child_reports_typed_path_and_keeps_siblings_without_replay() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("a")).unwrap();
+        std::fs::create_dir(root.path().join("b")).unwrap();
+        std::fs::write(root.path().join("b/file"), b"data").unwrap();
+        let client = Posix::new(root.path()).unwrap();
+        let mut visited = Vec::new();
+        let mut errors = Vec::new();
+        visit_backend(
+            &client,
+            Path::new("./typed"),
+            Path::new("/"),
+            &Config {
+                sorted_output: true,
+                ..Config::default()
+            },
+            Attributes::MODE,
+            |entry| {
+                visited.push(entry.path().to_path_buf());
+                if entry.path() == Path::new("./typed/a") {
+                    std::fs::remove_dir(root.path().join("a")).unwrap();
+                }
+                WalkControl::Continue
+            },
+            |path, depth, error| {
+                errors.push((path.to_path_buf(), depth, error.raw_code()));
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            errors,
+            [(PathBuf::from("./typed/a"), 1, uucore::libc::ENOENT as u32)]
+        );
+        assert_eq!(
+            visited,
+            ["./typed", "./typed/a", "./typed/b", "./typed/b/file"].map(PathBuf::from)
+        );
     }
 }

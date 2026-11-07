@@ -58,8 +58,11 @@ At runtime, the `VNFS_IMPL` environment variable selects the backend:
 Only the default `-P` mode (do not follow symlinks) and searches without `-x`
 use the VFSI path. Mount discovery inherits the supported mount security,
 version, port and export root. Unsupported modes or failed connection setup
-use the standard traversal. Once matching begins, an error stops traversal;
-restarting could duplicate output, deletions or executed commands.
+use the standard traversal. During matching, unreadable or vanished child
+directories are reported and readable siblings continue; the command still
+returns a failure status. Transport, quota, and other terminal errors stop
+traversal. Matching is never replayed through the standard walker, avoiding
+duplicate output, deletions or executed commands.
 
 Traversal is incremental between directories. `-prune` avoids listing the
 pruned directory, and `-quit` stops without fetching the remaining tree.
@@ -74,5 +77,5 @@ cargo build --release --features vnfs
 VNFS_IMPL=nfs target/release/find /path/on/nfs -type f
 ```
 
-Maturity: experimental. This port uses the public `vnfs` 0.0.29 crate from
+Maturity: experimental. This port uses the public `vnfs` 0.0.30 crate from
 crates.io; a sibling development checkout is not required.
