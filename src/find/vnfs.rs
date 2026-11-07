@@ -86,6 +86,7 @@ fn visit_backend<C: Vfsi>(
     } else {
         defaults
     };
+    let mut had_errors = false;
     client
         .listdir_with_errors(
             vroot,
@@ -122,14 +123,25 @@ fn visit_backend<C: Vfsi>(
                 })
             },
             |path, depth, error| {
+                had_errors = true;
                 let path = render_path(typed, vroot, path)?;
                 on_error(&path, depth, &error);
                 Ok(ControlFlow::Continue(()))
             },
         )
-        .map(|_| {
+        .map(|completion| {
             if std::env::var("VNFS_PROFILE").as_deref() == Ok("1") {
-                eprintln!("[profile] find_walk_completed");
+                match (completion, had_errors) {
+                    (vnfs::directory::TraversalCompletion::Complete, false) => {
+                        eprintln!("[profile] find_walk_completed");
+                    }
+                    (vnfs::directory::TraversalCompletion::Complete, true) => {
+                        eprintln!("[profile] find_walk_completed_with_errors");
+                    }
+                    (vnfs::directory::TraversalCompletion::Stopped, _) => {
+                        eprintln!("[profile] find_walk_stopped");
+                    }
+                }
             }
         })
 }

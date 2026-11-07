@@ -284,6 +284,69 @@ fn parse_args(args: &[&str]) -> Result<ParsedInfo, Box<dyn Error>> {
     })
 }
 
+enum EntryDecision {
+    Continue,
+    Prune,
+    Stop,
+}
+
+/// Matcher effects and finalization are shared by both traversal producers.
+struct MatcherDriver<'a> {
+    deps: &'a dyn Dependencies,
+    matcher: &'a dyn matchers::Matcher,
+    quit: &'a mut bool,
+    current_dir: Option<PathBuf>,
+    status: i32,
+}
+impl<'a> MatcherDriver<'a> {
+    fn new(
+        deps: &'a dyn Dependencies,
+        matcher: &'a dyn matchers::Matcher,
+        quit: &'a mut bool,
+    ) -> Self {
+        Self {
+            deps,
+            matcher,
+            quit,
+            current_dir: None,
+            status: 0,
+        }
+    }
+    fn visit(&mut self, entry: &WalkEntry) -> EntryDecision {
+        let mut io = matchers::MatcherIO::new(self.deps);
+        let new_dir = entry.path().parent().map(std::path::Path::to_path_buf);
+        if new_dir != self.current_dir {
+            if let Some(dir) = self.current_dir.take() {
+                self.matcher.finished_dir(dir.as_path(), &mut io);
+            }
+            self.current_dir = new_dir;
+        }
+        self.matcher.matches(entry, &mut io);
+        if io.exit_code() != 0 {
+            self.status = io.exit_code();
+        }
+        if io.should_quit() {
+            *self.quit = true;
+            EntryDecision::Stop
+        } else if io.should_skip_current_dir() {
+            EntryDecision::Prune
+        } else {
+            EntryDecision::Continue
+        }
+    }
+    fn finish(mut self) -> i32 {
+        let mut io = matchers::MatcherIO::new(self.deps);
+        if let Some(dir) = self.current_dir.take() {
+            self.matcher.finished_dir(dir.as_path(), &mut io);
+        }
+        self.matcher.finished(&mut io);
+        if io.exit_code() != 0 {
+            self.status = io.exit_code();
+        }
+        self.status
+    }
+}
+
 fn process_dir(
     dir: &str,
     config: &Config,
@@ -298,14 +361,20 @@ fn process_dir(
         return 0;
     }
 
-    // Opt-in VFSI/NFS traversal: enumerate and stat the tree through batched
-    // NFS compounds instead of walkdir's per-entry kernel `stat`. Falls back to
-    // walkdir for unsupported modes or any backend failure.
+    // Fallback is allowed only before matcher effects begin.
     #[cfg(all(target_os = "linux", feature = "vnfs"))]
-    #[allow(clippy::collapsible_if)]
-    if vnfs::is_enabled() && vnfs::supports(config) {
-        if let Some(result) = process_vfsi(dir, config, deps, matcher, quit) {
-            return result;
+    if vnfs::is_enabled() {
+        if vnfs::supports(config) {
+            if let Some(result) = process_vfsi(dir, config, deps, matcher, quit) {
+                return result;
+            }
+            if std::env::var("VNFS_PROFILE").as_deref() == Ok("1") {
+                eprintln!(
+                    "[profile] find_fallback phase=setup reason=unavailable matcher_effects=none"
+                );
+            }
+        } else if std::env::var("VNFS_PROFILE").as_deref() == Ok("1") {
+            eprintln!("[profile] find_fallback phase=admission reason=unsupported_mode matcher_effects=none");
         }
     }
 
@@ -320,59 +389,22 @@ fn process_dir(
         walkdir = walkdir.sort_by(|a, b| a.file_name().cmp(b.file_name()));
     }
 
-    let mut ret = 0;
-
-    // Slightly yucky loop handling here :-(. See docs for
-    // WalkDirIterator::skip_current_dir for explanation.
+    let mut driver = MatcherDriver::new(deps, matcher, quit);
     let mut it = walkdir.into_iter();
-    // As WalkDir seems not providing a function to check its stack,
-    // using current_dir is a workaround to check leaving directory.
-    let mut current_dir: Option<PathBuf> = None;
     while let Some(result) = it.next() {
         match WalkEntry::from_walkdir(result, config.follow) {
-            Err(err) => {
-                ret = 1;
-                writeln!(&mut stderr(), "Error: {err}").unwrap();
+            Err(error) => {
+                driver.status = 1;
+                writeln!(&mut stderr(), "Error: {error}").unwrap();
             }
-            Ok(entry) => {
-                let mut matcher_io = matchers::MatcherIO::new(deps);
-
-                let new_dir = entry.path().parent().map(std::path::Path::to_path_buf);
-                if new_dir != current_dir {
-                    if let Some(dir) = current_dir.take() {
-                        matcher.finished_dir(dir.as_path(), &mut matcher_io);
-                    }
-                    current_dir = new_dir;
-                }
-
-                matcher.matches(&entry, &mut matcher_io);
-                match matcher_io.exit_code() {
-                    0 => {}
-                    code => ret = code,
-                }
-                if matcher_io.should_quit() {
-                    *quit = true;
-                    break;
-                }
-                if matcher_io.should_skip_current_dir() {
-                    it.skip_current_dir();
-                }
-            }
+            Ok(entry) => match driver.visit(&entry) {
+                EntryDecision::Stop => break,
+                EntryDecision::Prune => it.skip_current_dir(),
+                EntryDecision::Continue => {}
+            },
         }
     }
-
-    let mut matcher_io = matchers::MatcherIO::new(deps);
-    if let Some(dir) = current_dir.take() {
-        matcher.finished_dir(dir.as_path(), &mut matcher_io);
-    }
-    matcher.finished(&mut matcher_io);
-    // This is implemented for exec +.
-    match matcher_io.exit_code() {
-        0 => {}
-        code => ret = code,
-    }
-
-    ret
+    driver.finish()
 }
 
 /// Drive matchers incrementally over the VFSI traversal.
@@ -386,37 +418,16 @@ fn process_vfsi(
     matcher: &dyn matchers::Matcher,
     quit: &mut bool,
 ) -> Option<i32> {
-    let mut ret = 0;
-    let mut current_dir: Option<PathBuf> = None;
+    let mut driver = MatcherDriver::new(deps, matcher, quit);
     let mut traversal_errors = false;
     let result = vnfs::visit(
         dir,
         config,
         matcher.metadata_fields(),
-        |entry| {
-            let mut matcher_io = matchers::MatcherIO::new(deps);
-
-            let new_dir = entry.path().parent().map(std::path::Path::to_path_buf);
-            if new_dir != current_dir {
-                if let Some(dir) = current_dir.take() {
-                    matcher.finished_dir(dir.as_path(), &mut matcher_io);
-                }
-                current_dir = new_dir;
-            }
-
-            matcher.matches(&entry, &mut matcher_io);
-            match matcher_io.exit_code() {
-                0 => {}
-                code => ret = code,
-            }
-            if matcher_io.should_quit() {
-                *quit = true;
-                return ::vnfs::directory::WalkControl::Stop;
-            }
-            if matcher_io.should_skip_current_dir() {
-                return ::vnfs::directory::WalkControl::SkipSubtree;
-            }
-            ::vnfs::directory::WalkControl::Continue
+        |entry| match driver.visit(&entry) {
+            EntryDecision::Stop => ::vnfs::directory::WalkControl::Stop,
+            EntryDecision::Prune => ::vnfs::directory::WalkControl::SkipSubtree,
+            EntryDecision::Continue => ::vnfs::directory::WalkControl::Continue,
         },
         |path, _, error| {
             traversal_errors = true;
@@ -429,26 +440,17 @@ fn process_vfsi(
         },
     )?;
     if traversal_errors {
-        ret = 1;
+        driver.status = 1;
     }
     if let Err(error) = result {
-        ret = 1;
+        driver.status = 1;
         writeln!(&mut stderr(), "Error: {error}").unwrap();
-        // Matching may already have printed or executed commands. Do not
-        // restart through walkdir after an incremental traversal failure.
+        if std::env::var("VNFS_PROFILE").as_deref() == Ok("1") {
+            eprintln!("[profile] find_walk_failed phase=execute replay=forbidden");
+        }
+        // Earlier matcher effects are never replayed through walkdir.
     }
-
-    let mut matcher_io = matchers::MatcherIO::new(deps);
-    if let Some(dir) = current_dir.take() {
-        matcher.finished_dir(dir.as_path(), &mut matcher_io);
-    }
-    matcher.finished(&mut matcher_io);
-    match matcher_io.exit_code() {
-        0 => {}
-        code => ret = code,
-    }
-
-    Some(ret)
+    Some(driver.finish())
 }
 
 fn do_find(args: &[&str], deps: &dyn Dependencies) -> Result<i32, Box<dyn Error>> {

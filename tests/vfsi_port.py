@@ -19,6 +19,29 @@ with tempfile.TemporaryDirectory(prefix="vfsi-find-") as directory:
             if mode == "dummy": assert b"find_walk_completed" in result.stderr
             results.append(sorted(result.stdout.splitlines()))
         assert results[0] == results[1], (expression,results)
+    for expression in [["-print", "-quit"],
+            ["-exec", "printf", "%s\\n", "{}", "+"]]:
+        results = []
+        for mode in ["off", "dummy"]:
+            result = subprocess.run([str(binary), str(root), *expression], capture_output=True,
+                env=dict(os.environ, LC_ALL="C", VNFS_IMPL=mode, VNFS_PROFILE="1"),
+                timeout=15)
+            assert result.returncode == 0, result.stderr
+            if mode == "dummy" and "-quit" in expression:
+                assert b"find_walk_stopped" in result.stderr, result.stderr
+                assert b"find_walk_completed" not in result.stderr, result.stderr
+            results.append(sorted(result.stdout.splitlines()))
+        assert results[0] == results[1], (expression, results)
+    results = []
+    for mode in ["off", "dummy"]:
+        result = subprocess.run([str(binary), "-L", str(root), "-maxdepth", "1", "-print"],
+            capture_output=True, env=dict(os.environ, LC_ALL="C", VNFS_IMPL=mode, VNFS_PROFILE="1"),
+            timeout=15)
+        assert result.returncode == 0, result.stderr
+        if mode == "dummy":
+            assert b"find_fallback phase=admission reason=unsupported_mode matcher_effects=none" in result.stderr
+        results.append(sorted(result.stdout.splitlines()))
+    assert results[0] == results[1]
 print("find VFSI metadata, pruning, and activation checks passed")
 
 if os.geteuid() == 0:
@@ -47,7 +70,7 @@ else:
                     assert os.fsencode(denied) in result.stderr, result.stderr
                     assert os.fsencode(readable / "file") in result.stdout, result.stdout
                     if mode == "dummy":
-                        assert b"find_walk_completed" in result.stderr, result.stderr
+                        assert b"find_walk_completed_with_errors" in result.stderr, result.stderr
                     outputs.append((sorted(result.stdout.splitlines()),
                         sorted(log.read_bytes().splitlines()) if log.exists() else []))
                 assert outputs[0] == outputs[1], (expression, outputs)
