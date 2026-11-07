@@ -499,6 +499,9 @@ pub struct WalkEntry {
     follow: Follow,
     /// Cached metadata.
     meta: OnceCell<Result<Meta, WalkError>>,
+    /// Native-only identity lookup, shared by device-dependent predicates.
+    #[cfg(unix)]
+    native_device: OnceCell<Result<u64, WalkError>>,
 }
 
 impl WalkEntry {
@@ -508,6 +511,8 @@ impl WalkEntry {
             inner: Entry::Explicit(path.into(), depth),
             follow,
             meta: OnceCell::new(),
+            #[cfg(unix)]
+            native_device: OnceCell::new(),
         }
     }
 
@@ -519,6 +524,8 @@ impl WalkEntry {
             inner: Entry::Explicit(path.into(), depth),
             follow,
             meta: Ok(Meta::Vfs(meta)).into(),
+            #[cfg(unix)]
+            native_device: OnceCell::new(),
         }
     }
 
@@ -540,6 +547,8 @@ impl WalkEntry {
                         inner: Entry::WalkDir(entry),
                         follow,
                         meta: OnceCell::new(),
+                        #[cfg(unix)]
+                        native_device: OnceCell::new(),
                     }
                 };
                 Ok(ret)
@@ -552,6 +561,8 @@ impl WalkEntry {
                             inner: Entry::Explicit(path.into(), depth),
                             follow: Follow::Never,
                             meta: Ok(Meta::Std(meta)).into(),
+                            #[cfg(unix)]
+                            native_device: OnceCell::new(),
                         });
                     }
                 }
@@ -609,7 +620,9 @@ impl WalkEntry {
         if let Ok(device) = self.metadata()?.dev() {
             return Ok(device);
         }
-        self.get_metadata()?.dev().map_err(WalkError::from)
+        self.native_device
+            .get_or_init(|| self.get_metadata()?.dev().map_err(WalkError::from))
+            .clone()
     }
 
     /// Get the metadata on a cache miss.
@@ -683,6 +696,45 @@ mod vfsi_metadata_tests {
         assert_eq!(metadata.ctime().unwrap_err().kind(), ErrorKind::Unsupported);
         assert_eq!(
             entry.device().unwrap(),
+            std::fs::symlink_metadata(&path).unwrap().dev()
+        );
+    }
+
+    #[test]
+    fn native_device_is_reused_after_the_first_predicate() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("file");
+        std::fs::write(&path, b"").unwrap();
+        let fs = Posix::new(root.path()).unwrap();
+        let attrs = fs
+            .attrs_with_options("/file", AttrsOptions::new().with_fields(Attributes::MODE))
+            .unwrap();
+        let entry = WalkEntry::from_vfs(&path, 0, Follow::Never, attrs);
+        let device = entry.device().unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(entry.device().unwrap(), device);
+    }
+
+    #[test]
+    fn native_device_failure_is_cached_for_the_same_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("file");
+        std::fs::write(&path, b"").unwrap();
+        let fs = Posix::new(root.path()).unwrap();
+        let attrs = fs
+            .attrs_with_options("/file", AttrsOptions::new().with_fields(Attributes::MODE))
+            .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let entry = WalkEntry::from_vfs(&path, 0, Follow::Never, attrs.clone());
+        assert!(entry.device().is_err());
+        std::fs::write(&path, b"").unwrap();
+        assert!(
+            entry.device().is_err(),
+            "one entry must reuse its native lookup failure"
+        );
+        let fresh = WalkEntry::from_vfs(&path, 0, Follow::Never, attrs);
+        assert_eq!(
+            fresh.device().unwrap(),
             std::fs::symlink_metadata(&path).unwrap().dev()
         );
     }
