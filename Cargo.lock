@@ -139,7 +139,7 @@ version = "0.73.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "787ef8ef523575546b106a58213d6e6b06198a05c2f757258c68a74273670cfa"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "cexpr",
  "clang-sys",
  "proc-macro2",
@@ -147,23 +147,23 @@ dependencies = [
  "regex",
  "rustc-hash",
  "shlex",
- "syn 3.0.3",
+ "syn 2.0.119",
 ]
 
 [[package]]
 name = "bitfields"
-version = "3.1.0"
+version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc60559c55b3141f06748f65eff6e7dc3bca3c10987f6ab67c8c1a678ea2b4f5"
+checksum = "807d221c91e4249c6beacda2a1c27083786aa457a254f0caecf0008976f7388f"
 dependencies = [
  "bitfields-impl",
 ]
 
 [[package]]
 name = "bitfields-impl"
-version = "3.1.0"
+version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94545860de26e27b256f5fd0e3e3146db17d19c4757d821e07e887cd5250c8a7"
+checksum = "4e21ae6cea457e4a4181b9d3923fc5e880df098b2e7acb07387c5ad975e09547"
 dependencies = [
  "derive_more",
  "getset",
@@ -172,7 +172,7 @@ dependencies = [
  "rustversion",
  "strum",
  "strum_macros",
- "syn 2.0.119",
+ "syn 3.0.9",
  "thiserror",
 ]
 
@@ -991,9 +991,9 @@ dependencies = [
 
 [[package]]
 name = "libntirpc-sys"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73dcebf725cfc5496e2c200c7aaba14f8c40ecc3c49b68f9339270b75ef49c92"
+checksum = "53598d8ac548008245e75c0c70370f8553aa882bd0dd9e6f75135fd6976fc5ff"
 dependencies = [
  "bindgen",
  "cc",
@@ -1840,7 +1840,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41f9ca2369f1428e4b973267deb4ca628505a9f02672df13dc2f739946d63572"
 dependencies = [
  "bitfields",
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "libc",
 ]
 
