@@ -77,5 +77,5 @@ cargo build --release --features vnfs
 VNFS_IMPL=nfs target/release/find /path/on/nfs -type f
 ```
 
-Maturity: experimental. This port uses the public `vnfs` 0.0.30 crate from
+Maturity: experimental. This port uses the public `vnfs` 0.0.31 crate from
 crates.io; a sibling development checkout is not required.
