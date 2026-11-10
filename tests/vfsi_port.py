@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
-binary = Path(__file__).resolve().parents[1] / "target/debug/find"
+target = Path(os.environ.get("CARGO_TARGET_DIR", Path(__file__).resolve().parents[1] / "target"))
+binary = target / "debug/find"
 with tempfile.TemporaryDirectory(prefix="vfsi-find-") as directory:
     root = Path(directory)
     (root / "sub").mkdir()
