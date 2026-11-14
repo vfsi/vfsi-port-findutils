@@ -6,7 +6,6 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::env;
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
 use std::time::SystemTime;
@@ -71,18 +70,7 @@ impl Dependencies for FakeDependencies {
 }
 
 pub fn path_to_testing_commandline() -> String {
-    let mut path_to_use = env::current_exe()
-        // this will be something along the lines of /my/homedir/findutils/target/debug/deps/findutils-5532804878869ef1
-        .expect("can't find path of this executable")
-        .parent()
-        .expect("can't find parent directory of this executable")
-        .to_path_buf();
-    // and we want /my/homedir/findutils/target/debug/testing-commandline
-    if path_to_use.ends_with("deps") {
-        path_to_use.pop();
-    }
-    path_to_use = path_to_use.join("testing-commandline");
-    path_to_use.to_string_lossy().to_string()
+    env!("CARGO_BIN_EXE_testing-commandline").to_owned()
 }
 
 #[cfg(windows)]
