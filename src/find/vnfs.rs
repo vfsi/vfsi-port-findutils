@@ -149,7 +149,7 @@ fn visit_backend<C: Vfsi>(
 fn render_path(typed: &Path, vroot: &Path, path: &Path) -> vnfs::Result<PathBuf> {
     let relative = path
         .strip_prefix(vroot)
-        .map_err(|_| vnfs::Error::errno(0, 22))?;
+        .map_err(|_| std::io::Error::from_raw_os_error(uucore::libc::EINVAL))?;
     Ok(if relative.as_os_str().is_empty() {
         typed.to_path_buf()
     } else {
@@ -337,7 +337,7 @@ mod tests {
                 unexpected_error,
             );
             if fails {
-                assert_eq!(result.unwrap_err().raw_code(), uucore::libc::EFBIG as u32);
+                assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::FileTooLarge);
             } else {
                 result.unwrap();
                 assert_eq!(
@@ -413,13 +413,13 @@ mod tests {
                 WalkControl::Continue
             },
             |path, depth, error| {
-                errors.push((path.to_path_buf(), depth, error.raw_code()));
+                errors.push((path.to_path_buf(), depth, error.kind()));
             },
         )
         .unwrap();
         assert_eq!(
             errors,
-            [(PathBuf::from("./typed/a"), 1, uucore::libc::ENOENT as u32)]
+            [(PathBuf::from("./typed/a"), 1, std::io::ErrorKind::NotFound)]
         );
         assert_eq!(
             visited,
